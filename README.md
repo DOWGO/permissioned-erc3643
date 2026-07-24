@@ -47,7 +47,7 @@ The bridge is designed against Uniswap's officially-deployed contracts:
 | Contract | Address |
 |----------|---------|
 | `PermissionsAdapterFactory` | `0xEe258C31574fb59660C23534E76AF6497c2e5683` |
-| `PermissionedHooks` | `0xEADe493b075Cee00e6A832Af758B7c76793FE880` |
+| `PermissionedHooks` | `0x8B0E8d467af81D9F5B49165e104a2fe1b98328C0` |
 | `PoolManager` | `0xE03A1074c86CFeDd5C142C4F04F1a1536e203543` |
 
 ## Build & test

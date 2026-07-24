@@ -41,7 +41,7 @@ import {
 contract OfficialDeploymentForkTest is Test {
     // Uniswap official PermissionedPools deployment — Sepolia
     address constant FACTORY = 0xEe258C31574fb59660C23534E76AF6497c2e5683;
-    address constant HOOK = 0xEADe493b075Cee00e6A832Af758B7c76793FE880;
+    address constant HOOK = 0x8B0E8d467af81D9F5B49165e104a2fe1b98328C0;
     address constant POOL_MANAGER = 0xE03A1074c86CFeDd5C142C4F04F1a1536e203543;
 
     uint256 constant LP_TOPIC = 42;
