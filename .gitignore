@@ -1,0 +1,11 @@
+# Foundry
+/out/
+/cache/
+/broadcast/
+
+# OS
+.DS_Store
+
+# Docs internes non publiables
+uniswap_permissioned.md
+uniswap_permissioned.png
