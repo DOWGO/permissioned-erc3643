@@ -303,6 +303,29 @@ contract PermissionedFlowTest is Test {
         hook.beforeInitialize(address(0), key, 0);
     }
 
+    /// @dev A pool pairing a verified adapter with an adapter that exists but was never verified.
+    ///      The earlier hook accepted this — one verified currency was enough — which let an
+    ///      unvetted permissioned token into a pool through the other side.
+    function test_initialize_reverts_when_one_adapter_is_unverified() public {
+        MockTREXToken otherToken = new MockTREXToken(address(registry));
+        address unverified = factory.createPermissionsAdapter(IERC20(address(otherToken)), issuer, checker);
+        // deliberately no verifyPermissionsAdapter(unverified)
+
+        (address c0, address c1) =
+            address(adapter) < unverified ? (address(adapter), unverified) : (unverified, address(adapter));
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(c0),
+            currency1: Currency.wrap(c1),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(hook))
+        });
+
+        vm.prank(address(poolManager));
+        vm.expectRevert(PermissionedHooks.UnverifiedAdapter.selector);
+        hook.beforeInitialize(address(0), key, 0);
+    }
+
     function test_beforeSwap_succeeds_for_verified_user() public {
         mockRouter.setMsgSender(alice);
         PoolKey memory key = _poolKey();

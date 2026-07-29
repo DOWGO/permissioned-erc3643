@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {IPoolManager, Currency} from "../../V4Router.sol";
-import {IPermissionsAdapter} from "./interfaces/IPermissionsAdapter.sol";
-import {IPermissionsAdapterFactory} from "./interfaces/IPermissionsAdapterFactory.sol";
-import {IMsgSender} from "../../interfaces/IMsgSender.sol";
-import {ReentrancyLock} from "../../base/ReentrancyLock.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {
+    IPermissionsAdapter
+} from "@uniswap/v4-periphery/src/hooks/permissionedPools/interfaces/IPermissionsAdapter.sol";
+import {
+    IPermissionsAdapterFactory
+} from "@uniswap/v4-periphery/src/hooks/permissionedPools/interfaces/IPermissionsAdapterFactory.sol";
+import {IMsgSender} from "@uniswap/v4-periphery/src/interfaces/IMsgSender.sol";
 import {Hooks, IHooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
@@ -13,10 +17,16 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
-import {BaseHook} from "../../utils/BaseHook.sol";
-import {PermissionFlags, PermissionFlag} from "./libraries/PermissionFlags.sol";
+import {BaseHook} from "@uniswap/v4-periphery/src/utils/BaseHook.sol";
+import {
+    PermissionFlags,
+    PermissionFlag
+} from "@uniswap/v4-periphery/src/hooks/permissionedPools/libraries/PermissionFlags.sol";
 
-contract PermissionedHooks is IHooks, ReentrancyLock, BaseHook {
+/// @title PermissionedHooks
+/// @notice Enforces per-currency allowlist on pools containing permissioned tokens.
+/// @dev Trusts wrapper-reported `msgSender()`; wrappers must be registered in adapter `allowedWrappers`.
+contract PermissionedHooks is IHooks, BaseHook {
     using StateLibrary for IPoolManager;
 
     IPermissionsAdapterFactory public immutable PERMISSIONS_ADAPTER_FACTORY;
@@ -45,10 +55,10 @@ contract PermissionedHooks is IHooks, ReentrancyLock, BaseHook {
     error Unauthorized();
     error SwappingDisabled();
     error NoVerifiedAdapter();
+    error UnverifiedAdapter();
 
     constructor(IPoolManager manager, IPermissionsAdapterFactory permissionsAdapterFactory) BaseHook(manager) {
         PERMISSIONS_ADAPTER_FACTORY = permissionsAdapterFactory;
-        Hooks.validateHookPermissions(this, getHookPermissions());
     }
 
     /// @dev Returns the hook permissions configuration for this contract
@@ -59,13 +69,23 @@ contract PermissionedHooks is IHooks, ReentrancyLock, BaseHook {
         permissions.beforeAddLiquidity = true;
     }
 
-    /// @dev Requires at least one pool currency to be a verified permissions adapter
+    /// @dev Requires at least one pool currency to be a verified permissions adapter, and disallows
+    /// any pool currency that is an unverified permissions adapter.
     function _beforeInitialize(address, PoolKey calldata key, uint160) internal view override returns (bytes4) {
-        bool currency0Verified =
-            PERMISSIONS_ADAPTER_FACTORY.verifiedPermissionsAdapterOf(Currency.unwrap(key.currency0)) != address(0);
-        bool currency1Verified =
-            PERMISSIONS_ADAPTER_FACTORY.verifiedPermissionsAdapterOf(Currency.unwrap(key.currency1)) != address(0);
-        if (!currency0Verified && !currency1Verified) revert NoVerifiedAdapter();
+        address currency0 = Currency.unwrap(key.currency0);
+        address currency1 = Currency.unwrap(key.currency1);
+
+        bool currency0IsAdapter = PERMISSIONS_ADAPTER_FACTORY.permissionsAdapterOf(currency0) != address(0);
+        bool currency1IsAdapter = PERMISSIONS_ADAPTER_FACTORY.permissionsAdapterOf(currency1) != address(0);
+
+        if (!currency0IsAdapter && !currency1IsAdapter) revert NoVerifiedAdapter();
+        if (currency0IsAdapter && PERMISSIONS_ADAPTER_FACTORY.verifiedPermissionsAdapterOf(currency0) == address(0)) {
+            revert UnverifiedAdapter();
+        }
+        if (currency1IsAdapter && PERMISSIONS_ADAPTER_FACTORY.verifiedPermissionsAdapterOf(currency1) == address(0)) {
+            revert UnverifiedAdapter();
+        }
+
         return IHooks.beforeInitialize.selector;
     }
 
@@ -109,8 +129,10 @@ contract PermissionedHooks is IHooks, ReentrancyLock, BaseHook {
 
     /// @dev checks if the sender is allowed to access both tokens in the pool
     function _verifyAllowlist(IMsgSender sender, PoolKey calldata poolKey, bytes4 selector) internal view {
-        _isAllowed(Currency.unwrap(poolKey.currency0), sender.msgSender(), address(sender), selector);
-        _isAllowed(Currency.unwrap(poolKey.currency1), sender.msgSender(), address(sender), selector);
+        // cache so both currency checks see the same subject
+        address msgSender = sender.msgSender();
+        _isAllowed(Currency.unwrap(poolKey.currency0), msgSender, address(sender), selector);
+        _isAllowed(Currency.unwrap(poolKey.currency1), msgSender, address(sender), selector);
     }
 
     /// @dev checks if the provided token is a permissioned token by checking if it has a verified permissions adapter, if yes, check the allowlist and check whether swapping is enabled
