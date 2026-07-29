@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  FOUNDRY_PROFILE: default
+
+jobs:
+  test:
+    name: Forge build & test
+    runs-on: ubuntu-latest
+    env:
+      SEPOLIA_RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Build
+        run: forge build --sizes
+
+      - name: Check formatting
+        run: forge fmt --check
+
+      - name: Run tests (offline)
+        run: forge test -vv
+
+      # The live-fork suite asserts the bridge against the REAL official Sepolia
+      # PermissionedPools deployment. Without SEPOLIA_RPC_URL it self-skips, so we
+      # run it explicitly here to actually exercise the "official-deployment-compatible"
+      # guarantee on every push. Set the SEPOLIA_RPC_URL repository secret.
+      - name: Run live-fork tests (Sepolia)
+        if: ${{ env.SEPOLIA_RPC_URL != '' }}
+        run: forge test --match-path test/OfficialDeploymentFork.t.sol -vv
