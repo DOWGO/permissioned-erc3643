@@ -31,6 +31,7 @@ import {
 import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
 
 import {TREXAllowlistChecker} from "../src/TREXAllowlistChecker.sol";
+import {RevertingTrustedIssuersRegistry, RevertingIdentity} from "./TREXAllowlistCheckerHardening.t.sol";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Mocks
@@ -376,6 +377,46 @@ contract PermissionedFlowTest is Test {
         vm.prank(address(poolManager));
         vm.expectRevert(PermissionedHooks.Unauthorized.selector);
         hook.beforeAddLiquidity(address(mockRouter), key, _liquidityParams(), "");
+    }
+
+    // ── fail-closed degradation, exercised through the real hook callbacks ───
+
+    /// @dev A token-wide TrustedIssuersRegistry outage is reached by the LP probe on EVERY swap,
+    ///      even though the swap gate only depends on isVerified. It must not freeze the pool.
+    function test_beforeSwap_survives_issuers_registry_outage() public {
+        registry.setIssuersRegistry(address(new RevertingTrustedIssuersRegistry()));
+        assertTrue(registry.isVerified(bob), "precondition: bob is still KYC-verified");
+
+        mockRouter.setMsgSender(bob);
+        PoolKey memory key = _poolKey();
+        vm.prank(address(poolManager));
+        (bytes4 selector,,) = hook.beforeSwap(address(mockRouter), key, _swapParams(), "");
+        assertEq(selector, IHooks.beforeSwap.selector);
+    }
+
+    /// @dev The same outage denies liquidity — but as a clean Unauthorized, not as an opaque revert
+    ///      propagated out of the checker.
+    function test_beforeAddLiquidity_denies_cleanly_on_issuers_registry_outage() public {
+        registry.setIssuersRegistry(address(new RevertingTrustedIssuersRegistry()));
+
+        mockRouter.setMsgSender(bob);
+        PoolKey memory key = _poolKey();
+        vm.prank(address(poolManager));
+        vm.expectRevert(PermissionedHooks.Unauthorized.selector);
+        hook.beforeAddLiquidity(address(mockRouter), key, _liquidityParams(), "");
+    }
+
+    /// @dev A user-deployed ONCHAINID that reverts is an Untrusted dependency on the LP path only;
+    ///      its owner must keep the swap right the registry granted them.
+    function test_beforeSwap_survives_broken_onchainid() public {
+        registry.setIdentity(bob, address(new RevertingIdentity()));
+        assertTrue(registry.isVerified(bob), "precondition: bob is still KYC-verified");
+
+        mockRouter.setMsgSender(bob);
+        PoolKey memory key = _poolKey();
+        vm.prank(address(poolManager));
+        (bytes4 selector,,) = hook.beforeSwap(address(mockRouter), key, _swapParams(), "");
+        assertEq(selector, IHooks.beforeSwap.selector);
     }
 
     function test_only_allowed_wrappers_can_wrap() public {

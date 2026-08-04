@@ -24,10 +24,29 @@ into the v4 `PermissionFlag` model consumed by the Uniswap-official `Permissions
 - **`LIQUIDITY_ALLOWED`** additionally iff `account`'s OnchainID holds a **valid** claim on the
   configured `LP_CLAIM_TOPIC`. Validity is checked the same way ERC-3643's `IdentityRegistry.isVerified`
   does: the claim must come from an issuer in the token's `TrustedIssuersRegistry` and pass
-  `IClaimIssuer.isClaimValid` (not merely exist). A hostile/broken issuer is tolerated via `try/catch`.
+  `IClaimIssuer.isClaimValid` (not merely exist). The claim body must additionally *name* the trusted
+  issuer its claim id was derived from — validity is re-derived from the registry, never taken from the
+  identity's self-reported record.
 
 The contract holds no funds, has no owner/admin surface, and makes only `view` external calls into the
 token's own registry-governed contracts.
+
+### `checkAllowlist` never reverts
+
+The checker runs **inside** the PoolManager's `beforeSwap` / `beforeAddLiquidity` callback. A revert
+there is not a denial — it bricks the pool for everyone, including LPs trying to exit. `checkAllowlist`
+is therefore a total function, and every failure degrades to a strictly lower-or-equal permission:
+
+- The swap decision (`identityRegistry()`, `isVerified()`) is read through low-level staticcalls with a
+  fixed 32-byte output buffer and an explicit `returndatasize` check. Oversized return data is never
+  copied, a missing contract is detected, and there is no ABI decode left to fail — `try/catch` cannot
+  guard a decode, since it runs in the caller's own frame.
+- The LP decision runs in an isolated, gas-bounded self-staticcall (`probeLpClaim`). A reverting
+  registry, a broken OnchainID, a malformed claim tuple, a return bomb or a gas-devouring issuer costs
+  the liquidity flag and nothing else. **The two flags are decided independently: an LP-side failure
+  can never destroy a verified user's swap right.**
+
+`probeLpClaim` is public and side-effect free, so a denied liquidity flag stays diagnosable off-chain.
 
 ## Trust model
 
@@ -40,6 +59,12 @@ token's own registry-governed contracts.
 - The checker's trust root is whatever `tokenAddress` reports as its `identityRegistry()` and, in turn,
   that registry's `issuersRegistry()`. Wrapping a hostile token is out of the checker's control (that is
   the adapter owner's responsibility); the checker degrades safely (returns `NONE`/`SWAP_ALLOWED`).
+- The **OnchainID is untrusted**: it is user-controlled and may return a forged `issuer`/`signature`/
+  `data` tuple, revert, or return unbounded data. Only the `TrustedIssuersRegistry` decides who may
+  attest an LP claim.
+- **Claim issuers are semi-trusted**: registry-curated, but arbitrary third-party contracts. One that
+  reverts, returns a malformed answer or burns gas denies its own claim holders their liquidity flag —
+  it cannot deny anyone their swap right, nor stall the pool.
 
 ## Official PermissionedPools deployment (Sepolia)
 
