@@ -1,0 +1,12 @@
+# Vendored upstream CI. lib/v4-periphery and lib/v4-periphery/lib/permit2 are checked in with
+# their own .github/workflows/, which GitHub never discovers — Actions only reads the repository
+# root. Eight "mutable action tag" findings come from permit2's four workflows; they describe
+# Uniswap's CI, not ours, and pinning them would create a permanent diff against upstream.
+lib/**/.github/
+
+# Deliberately NOT excluded: lib/**/test/ and lib/ itself.
+#
+# Both look tempting and both are wrong. lib/v4-periphery/src/hooks/permissionedPools/ holds
+# Dowgo Solidity — PermissionedHooks, PermissionsAdapter, PermissionedV4Router — and
+# lib/v4-periphery/test/hooks/permissionedPools/ holds its tests. Excluding lib/ or lib/**/test/
+# would silence analysis of our own code while the dashboard turned green.

@@ -1,0 +1,19 @@
+# Keeps the two action refs in ci.yml fresh now that they are pinned to commit SHAs.
+#
+# Scope is the root only. The `lib/` tree holds vendored upstream repositories — v4-periphery
+# and, under it, permit2 — each carrying its own .github/workflows/. GitHub never runs those
+# (only the repository root is discovered), and Dependabot must not open PRs against upstream
+# CI we do not operate.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "Ops/Infra"
+    # Seven-day supply-chain guard, matching the rest of the estate. `default-days` IS supported
+    # for the GitHub Actions ecosystem; only the per-bump-type days are not.
+    cooldown:
+      default-days: 7
