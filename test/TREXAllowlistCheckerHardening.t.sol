@@ -34,6 +34,27 @@ contract ShortReturner {
     }
 }
 
+/// @dev Answers every call successfully with ZERO bytes — the shape a proxy whose implementation
+///      slot was never set produces. It still has code, so the `issuer.code.length` guard passes.
+contract EmptyReturner {
+    fallback() external {
+        assembly {
+            return(0, 0)
+        }
+    }
+}
+
+/// @dev Answers with a full 32-byte word that is not a canonical boolean, so only an explicit
+///      shape check — not `extcodesize` and not the call's own success — can reject it.
+contract DirtyBoolReturner {
+    fallback() external {
+        assembly {
+            mstore(0x00, 2)
+            return(0x00, 0x20)
+        }
+    }
+}
+
 /// @dev IdentityRegistry with individually switchable failure modes.
 contract HostileIdentityRegistry {
     mapping(address => bool) public verified;
@@ -328,6 +349,56 @@ contract TREXAllowlistCheckerHardeningTest is Test {
         assertTrue((flags & PermissionFlags.SWAP_ALLOWED) == PermissionFlags.SWAP_ALLOWED, "swap expected");
         assertTrue(
             (flags & PermissionFlags.LIQUIDITY_ALLOWED) == PermissionFlags.LIQUIDITY_ALLOWED, "liquidity expected"
+        );
+    }
+
+    /// @dev A malformed issuer must cost only ITS OWN claim. An honest issuer's independently valid
+    ///      attestation must survive whatever the registration order, because order is not stable in
+    ///      production: TrustedIssuersRegistry swap-and-pops the topic array on removal, so an
+    ///      unrelated owner action can move a malformed issuer ahead of an honest one.
+    ///
+    ///      Before the length-validated read, the ABI decode of the malformed answer ran in
+    ///      probeLpClaim's own frame — outside the per-issuer catch — and aborted the whole scan,
+    ///      stripping LIQUIDITY_ALLOWED from a holder whose valid claim sat at a higher index.
+    function test_malformed_issuer_does_not_suppress_a_second_valid_claim() public {
+        _assertHonestClaimSurvives(address(new ShortReturner()), true, "short returndata, index 0");
+        _assertHonestClaimSurvives(address(new ShortReturner()), false, "short returndata, index 1");
+        _assertHonestClaimSurvives(address(new EmptyReturner()), true, "empty returndata, index 0");
+        _assertHonestClaimSurvives(address(new EmptyReturner()), false, "empty returndata, index 1");
+        _assertHonestClaimSurvives(address(new DirtyBoolReturner()), true, "dirty bool, index 0");
+        _assertHonestClaimSurvives(address(new DirtyBoolReturner()), false, "dirty bool, index 1");
+    }
+
+    /// @dev Rebuilds the issuer set from scratch so the malformed issuer's INDEX is controlled.
+    ///      setUp() already seats `trustedIssuer` at index 0, so appending to the existing registry
+    ///      would only ever exercise the ordering that passes vacuously.
+    function _assertHonestClaimSurvives(address malformed, bool malformedFirst, string memory ctx) internal {
+        MockTrustedIssuersRegistry freshIssuers = new MockTrustedIssuersRegistry();
+        MockClaimIssuer honest = new MockClaimIssuer(true);
+
+        if (malformedFirst) {
+            freshIssuers.addTrustedIssuer(LP_TOPIC, malformed);
+            freshIssuers.addTrustedIssuer(LP_TOPIC, address(honest));
+        } else {
+            freshIssuers.addTrustedIssuer(LP_TOPIC, address(honest));
+            freshIssuers.addTrustedIssuer(LP_TOPIC, malformed);
+        }
+        registry.setIssuersRegistry(address(freshIssuers));
+
+        // The holder legitimately carries attestations from both issuers of the same topic.
+        MockIdentity id = new MockIdentity();
+        id.addClaim(LP_TOPIC, malformed, SIG, DATA);
+        id.addClaim(LP_TOPIC, address(honest), SIG, DATA);
+        registry.setIdentity(bob, address(id));
+
+        PermissionFlag flags = _checkNoRevert(bob, address(token));
+        assertTrue(
+            (flags & PermissionFlags.SWAP_ALLOWED) == PermissionFlags.SWAP_ALLOWED,
+            string.concat("swap must never be at stake on the LP path: ", ctx)
+        );
+        assertTrue(
+            (flags & PermissionFlags.LIQUIDITY_ALLOWED) == PermissionFlags.LIQUIDITY_ALLOWED,
+            string.concat("VULNERABLE: a malformed issuer suppressed an honest valid claim: ", ctx)
         );
     }
 

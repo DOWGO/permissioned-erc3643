@@ -146,11 +146,15 @@ contract TREXAllowlistChecker is BaseAllowlistChecker {
             // not-yet-deployed issuer from answering as an empty-returndata "yes".
             if (topic != LP_CLAIM_TOPIC || issuer != trustedIssuer || issuer.code.length == 0) continue;
 
-            try ITREXClaimIssuer(issuer).isClaimValid(id, LP_CLAIM_TOPIC, sig, data) returns (bool valid) {
-                if (valid) return true;
-            } catch {
-                // A broken or hostile issuer must not deny the remaining trusted issuers their turn.
-            }
+            // Read the issuer's verdict the way the swap path reads the registry's: a length- and
+            // shape-validated word. try/catch guards the call but NOT the ABI decode of its result,
+            // which runs in this frame — so an issuer that SUCCEEDS with zero-length returndata, a
+            // short word or a non-canonical bool would revert probeLpClaim uncaught and deny the
+            // remaining trusted issuers their turn. An explicit returndatasize check has no decode
+            // left to fail, so a malformed issuer now costs only its own claim.
+            (bool answered, bool valid) =
+                _staticBool(issuer, abi.encodeCall(ITREXClaimIssuer.isClaimValid, (id, LP_CLAIM_TOPIC, sig, data)));
+            if (answered && valid) return true;
         }
         return false;
     }
