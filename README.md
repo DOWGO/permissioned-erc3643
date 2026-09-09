@@ -103,10 +103,26 @@ is therefore a total function, and every failure degrades to a strictly lower-or
   permission — see [`checkAllowlist` never reverts](#checkallowlist-never-reverts) — never a higher one.
 - The **OnchainID is untrusted**: it is user-controlled and may return a forged `issuer`/`signature`/
   `data` tuple, revert, or return unbounded data. Only the `TrustedIssuersRegistry` decides who may
-  attest an LP claim.
+  attest an LP claim — but only the *issuer binding* is re-derived there. The `signature` and `data`
+  are whatever the identity returned, and ONCHAINID keys revocation on those exact bytes, so
+  `ClaimIssuer::revokeClaim` is not binding against an identity that answers `getClaim` differently
+  per caller. See [Issuer operations](#issuer-operations).
 - **Claim issuers are semi-trusted**: registry-curated, but arbitrary third-party contracts. One that
   reverts, returns a malformed answer or burns gas denies its own claim holders their liquidity flag —
   it cannot deny anyone their swap right, nor stall the pool.
+
+### Issuer operations
+
+The non-revocation half of `LIQUIDITY_ALLOWED` is only as strong as how the claim was revoked:
+
+- revoke with `revokeClaimBySignature` against the signature blob archived at issuance; treat
+  `revokeClaim` as advisory, since it reads the bytes to revoke from the holder's own identity;
+- confirm afterwards with `probeLpClaim(identityRegistry, account)` — it runs in the checker's frame,
+  so a caller-discriminating identity cannot spoof the answer;
+- `ClaimRevoked(bytes indexed signature)` indexes a dynamic type, so monitoring must compare
+  `keccak256(archivedSignature)` against the log topic, not the blob itself;
+- registry-agent fallbacks, if revocation cannot be made to bind: `IdentityRegistry::updateIdentity`
+  repoints one holder at a canonical ONCHAINID; `deleteIdentity` removes the swap right too.
 
 ## Official PermissionedPools deployment (Sepolia)
 

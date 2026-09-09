@@ -208,9 +208,17 @@ contract TREXAllowlistChecker is BaseAllowlistChecker {
             (uint256 topic,, address issuer, bytes memory sig, bytes memory data,) = ITREXIdentity(id).getClaim(claimId);
 
             // The tuple comes from the user's own OnchainID, so the claim body must name the very
-            // issuer its id was derived from — validity is re-derived from the TrustedIssuersRegistry,
-            // never from the identity's self-reported record. The code check keeps a de-registered or
-            // not-yet-deployed issuer from answering as an empty-returndata "yes".
+            // issuer its id was derived from: the ISSUER BINDING is re-derived from the
+            // TrustedIssuersRegistry, never from the identity's self-reported record. The code check
+            // keeps a de-registered or not-yet-deployed issuer from answering as an empty-returndata
+            // "yes".
+            //
+            // `sig` and `data` are NOT re-derived — they are whatever the untrusted OnchainID
+            // returned, and ONCHAINID keys revocation on those exact bytes. An identity that answers
+            // getClaim differently per caller therefore defeats ClaimIssuer::revokeClaim, which reads
+            // the bytes to revoke from that same identity. Issuers must revoke with
+            // revokeClaimBySignature against an archived blob and confirm with probeLpClaim; against
+            // a non-canonical identity, revokeClaim is advisory.
             if (topic != LP_CLAIM_TOPIC || issuer != trustedIssuer || issuer.code.length == 0) continue;
 
             // Read the issuer's verdict the way the swap path reads the registry's: a length- and
