@@ -110,6 +110,37 @@ contract MockIdentityRegistry {
 contract MockToken {
     address public identityRegistry;
 
+    // ERC-3643 emergency-control surface. Defaults are the unrestricted state, so a test that does
+    // not care about pause/freeze reads exactly as it did before the controls were consulted.
+    bool public paused;
+    mapping(address => bool) public isFrozen;
+    mapping(address => uint256) public getFrozenTokens;
+    mapping(address => uint256) public balanceOf;
+
+    constructor(address reg) {
+        identityRegistry = reg;
+    }
+
+    function setPaused(bool value) external {
+        paused = value;
+    }
+
+    function setAddressFrozen(address account, bool value) external {
+        isFrozen[account] = value;
+    }
+
+    /// @dev Mirrors freezePartialTokens/balanceOf: full immobilisation is `frozen >= balance`.
+    function setBalances(address account, uint256 balance, uint256 frozen) external {
+        balanceOf[account] = balance;
+        getFrozenTokens[account] = frozen;
+    }
+}
+
+/// @dev A token exposing only identityRegistry() — the pre-#5 surface. Used to prove that an
+///      unreadable control surface denies instead of defaulting to unpaused and unfrozen.
+contract MockRegistryOnlyToken {
+    address public identityRegistry;
+
     constructor(address reg) {
         identityRegistry = reg;
     }
@@ -242,6 +273,74 @@ contract TREXAllowlistCheckerTest is Test {
         registry.setVerified(account, true);
         id.addClaim(LP_TOPIC, address(trustedIssuer), SIG, DATA);
         _assertSwapAndLiquidity(checker.checkAllowlist(account, address(token)));
+    }
+
+    // --- token emergency controls (pause / freeze) ---
+    //
+    // isVerified() stays true through a pause and through a freeze: those controls live in the
+    // TOKEN's storage, not the registry's. The token's own transfer guards do not backstop a route
+    // where the adapter is an intermediate currency, because the underlying is never transferred.
+
+    function test_paused_token_returns_NONE() public {
+        registry.setVerified(alice, true);
+        aliceId.addClaim(LP_TOPIC, address(trustedIssuer), SIG, DATA);
+        _assertSwapAndLiquidity(checker.checkAllowlist(alice, address(token)));
+
+        token.setPaused(true);
+        assertTrue(
+            checker.checkAllowlist(alice, address(token)) == PermissionFlags.NONE,
+            "a paused token must deny every pool permission"
+        );
+    }
+
+    function test_frozen_wallet_returns_NONE() public {
+        registry.setVerified(alice, true);
+        registry.setVerified(bob, true);
+        aliceId.addClaim(LP_TOPIC, address(trustedIssuer), SIG, DATA);
+
+        token.setAddressFrozen(alice, true);
+        assertTrue(
+            checker.checkAllowlist(alice, address(token)) == PermissionFlags.NONE,
+            "a frozen wallet must deny every pool permission"
+        );
+        // The freeze is per-address: an unfrozen holder of the same token is untouched.
+        _assertSwapOnly(checker.checkAllowlist(bob, address(token)));
+    }
+
+    /// @dev freezePartialTokens(account, balanceOf(account)) immobilises a holder exactly as
+    ///      setAddressFrozen does while leaving isFrozen() false. Without this branch it is an exact
+    ///      substitute for the control above that the checker cannot see.
+    function test_fully_immobilised_wallet_returns_NONE() public {
+        registry.setVerified(alice, true);
+        token.setBalances(alice, 1_000, 1_000);
+        assertTrue(
+            checker.checkAllowlist(alice, address(token)) == PermissionFlags.NONE,
+            "a fully immobilised wallet must deny every pool permission"
+        );
+    }
+
+    /// @dev A partial freeze leaves the free balance transferable on the token, so it must stay
+    ///      tradeable here. Denying on any partial freeze would be stricter than the asset itself.
+    function test_partially_frozen_wallet_with_free_balance_still_trades() public {
+        registry.setVerified(alice, true);
+        aliceId.addClaim(LP_TOPIC, address(trustedIssuer), SIG, DATA);
+        token.setBalances(alice, 1_000, 999);
+        _assertSwapAndLiquidity(checker.checkAllowlist(alice, address(token)));
+    }
+
+    /// @dev Fail-closed: a token that stops answering a control getter denies rather than defaulting
+    ///      to unpaused and unfrozen, or the bypass returns whenever the dependency misbehaves.
+    function test_token_not_answering_the_control_surface_returns_NONE() public {
+        registry.setVerified(alice, true);
+        MockRegistryOnlyToken bare = new MockRegistryOnlyToken(address(registry));
+        assertTrue(
+            checker.checkAllowlist(alice, address(bare)) == PermissionFlags.NONE,
+            "an unreadable control surface must fail closed"
+        );
+
+        (bool readable, bool halted) = checker.probeTokenControls(address(bare), alice);
+        assertFalse(readable, "the denial must stay diagnosable as unreadable, not as a genuine halt");
+        assertTrue(halted, "an unreadable surface denies");
     }
 
     // --- helpers ---

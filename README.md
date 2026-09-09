@@ -19,8 +19,10 @@ into the v4 `PermissionFlag` model consumed by the Uniswap-official `Permissions
 
 `checkAllowlist(account, tokenAddress)` returns a `PermissionFlag`:
 
-- **`SWAP_ALLOWED`** iff the token's `IdentityRegistry.isVerified(account)` is true. Full ERC-3643
-  verification (all required claim topics, valid + non-revoked) is delegated to the registry.
+- **`SWAP_ALLOWED`** iff the token's `IdentityRegistry.isVerified(account)` is true **and** the token's
+  own emergency controls are readable and permit the account. Full ERC-3643 verification (all required
+  claim topics, valid + non-revoked) is delegated to the registry; the emergency controls are read from
+  the token, because they live in its storage and the registry knows nothing of them.
 - **`LIQUIDITY_ALLOWED`** additionally iff `account`'s OnchainID holds a **valid** claim on the
   configured `LP_CLAIM_TOPIC`. Validity is checked the same way ERC-3643's `IdentityRegistry.isVerified`
   does: the claim must come from an issuer in the token's `TrustedIssuersRegistry` and pass
@@ -30,6 +32,39 @@ into the v4 `PermissionFlag` model consumed by the Uniswap-official `Permissions
 
 The contract holds no funds, has no owner/admin surface, and makes only `view` external calls into the
 token's own registry-governed contracts.
+
+### Token emergency controls are part of the swap decision
+
+`isVerified` stays `true` through a global pause and through an address freeze: both live in the
+token's storage, not the registry's. That is normally backstopped by the token itself, since the
+underlying moves whenever the adapter wraps on settle or unwraps on take. It is **not** backstopped
+when the adapter is an *intermediate* currency: `V4Router` chains hops by assigning
+`amountIn = amountOut`, so the adapter's deltas cancel inside the `PoolManager`, nothing is wrapped or
+unwrapped, and the ERC-3643 token is never called. `checkAllowlist` therefore reads the controls
+itself, through `probeTokenControls` — public and side-effect free, so a denial stays diagnosable
+off-chain.
+
+Denied: `paused()`, `isFrozen(account)`, and full immobilisation
+(`getFrozenTokens(account) >= balanceOf(account)`, non-zero) — the last because
+`freezePartialTokens(account, balanceOf(account))` is otherwise an exact substitute for
+`setAddressFrozen` that the checker cannot see.
+
+Deliberately **not** covered:
+
+- **A partial freeze below the full balance still trades.** The free balance remains transferable on
+  the token, so denying the whole pool permission would be stricter than the asset itself.
+- **`ICompliance.canTransfer` and the counterparty's own verification** are outside the flag model:
+  both are amount- and counterparty-dependent, and a `PermissionFlag` is neither.
+- **The exit path is not permissioned at all** (no `beforeRemoveLiquidity` in the hook's permissions,
+  and decrease/burn are intentionally left unchecked upstream so holders can always exit). A frozen
+  holder with an existing position can still unwind it. A global pause contains that case, since the
+  unwrap is a real transfer; an address freeze does not.
+
+**This reader fails closed.** A token that stops answering any of the four getters resolves to `NONE`
+for every account — it halts that token's pools rather than defaulting to unpaused and unfrozen,
+because a fail-open default would restore the bypass whenever the dependency misbehaves. A token that
+does not implement the ERC-3643 `IToken` control surface at all cannot be wrapped; the adapter owner's
+recovery path is `PermissionsAdapter::updateAllowListChecker`.
 
 ### `checkAllowlist` never reverts
 

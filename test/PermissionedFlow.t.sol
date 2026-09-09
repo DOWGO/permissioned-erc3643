@@ -132,8 +132,26 @@ contract MockTREXToken is ERC20 {
         identityRegistry = registry;
     }
 
+    // ERC-3643 emergency-control surface consulted by TREXAllowlistChecker. Defaults are the
+    // unrestricted state; balanceOf comes from ERC20.
+    bool public paused;
+    mapping(address => bool) public isFrozen;
+    mapping(address => uint256) public getFrozenTokens;
+
     function setAllowed(address account, bool isAllowed) external {
         allowed[account] = isAllowed;
+    }
+
+    function setPaused(bool value) external {
+        paused = value;
+    }
+
+    function setAddressFrozen(address account, bool value) external {
+        isFrozen[account] = value;
+    }
+
+    function freezePartialTokens(address account, uint256 amount) external {
+        getFrozenTokens[account] = amount;
     }
 
     function mint(address to, uint256 amount) external {

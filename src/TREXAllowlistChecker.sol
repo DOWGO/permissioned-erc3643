@@ -11,6 +11,14 @@ import {
 interface ITREXToken {
     /// @return The IdentityRegistry governing this token's holders.
     function identityRegistry() external view returns (address);
+    /// @return True while an agent has paused all transfers of this token.
+    function paused() external view returns (bool);
+    /// @return True while an agent has frozen this wallet outright.
+    function isFrozen(address _userAddress) external view returns (bool);
+    /// @return The immobilised portion of this wallet's balance.
+    function getFrozenTokens(address _userAddress) external view returns (uint256);
+    /// @return The wallet's total balance, frozen portion included.
+    function balanceOf(address _userAddress) external view returns (uint256);
 }
 
 /// @notice Minimal slice of the ERC-3643 IdentityRegistry surface used by the checker.
@@ -102,6 +110,16 @@ contract TREXAllowlistChecker is BaseAllowlistChecker {
             _staticBool(idReg, abi.encodeCall(ITREXIdentityRegistry.isVerified, (account)));
         if (!verifiedOk || !verified) return PermissionFlags.NONE;
 
+        // ERC-3643's emergency controls live in the TOKEN, not the registry: isVerified stays true
+        // through a global pause and through a freeze. The token's own transfer guards normally
+        // backstop that, because the underlying moves whenever the adapter wraps on settle or
+        // unwraps on take. They do not bind a route where the adapter is an INTERMEDIATE currency:
+        // V4Router chains hops by assigning amountIn = amountOut, so the adapter's deltas cancel
+        // inside the PoolManager, nothing is wrapped or unwrapped, and the token is never called.
+        // Reading the controls here is what makes them bind pool trading on every route.
+        (bool controlsOk, bool halted) = probeTokenControls(tokenAddress, account);
+        if (!controlsOk || halted) return PermissionFlags.NONE;
+
         PermissionFlag flags = PermissionFlags.SWAP_ALLOWED;
 
         try this.probeLpClaim{gas: LP_PROBE_GAS}(idReg, account) returns (bool hasClaim) {
@@ -112,6 +130,50 @@ contract TREXAllowlistChecker is BaseAllowlistChecker {
         }
 
         return flags;
+    }
+
+    /// @notice Whether `tokenAddress` answers its ERC-3643 control surface, and whether that surface
+    ///         currently denies `account` any pool permission.
+    /// @param tokenAddress The ERC-3643 token whose pause and freeze state gate the pool.
+    /// @param account The trader/LP whose immobilisation is being resolved.
+    /// @return readable False when the token does not answer the IToken control surface at all.
+    /// @return halted True when the token is paused, or the account frozen or fully immobilised.
+    /// @dev Public and side-effect free, mirroring `probeLpClaim`: a denial stays diagnosable
+    ///      off-chain, where an unreadable surface is otherwise indistinguishable from a genuine
+    ///      halt. Fails closed — a getter that stops answering denies rather than defaulting to
+    ///      unpaused and unfrozen, or the bypass returns whenever the dependency misbehaves.
+    ///      No bounded frame is needed: `_staticWord` cannot revert, cannot decode and cannot be
+    ///      return-bombed, and `identityRegistry()` is already read full-gas from this same address.
+    function probeTokenControls(address tokenAddress, address account)
+        public
+        view
+        returns (bool readable, bool halted)
+    {
+        (bool pausedOk, bool isPaused) = _staticBool(tokenAddress, abi.encodeCall(ITREXToken.paused, ()));
+        if (!pausedOk) return (false, true);
+        if (isPaused) return (true, true);
+
+        (bool frozenOk, bool walletFrozen) =
+            _staticBool(tokenAddress, abi.encodeCall(ITREXToken.isFrozen, (account)));
+        if (!frozenOk) return (false, true);
+        if (walletFrozen) return (true, true);
+
+        // freezePartialTokens(account, balanceOf(account)) immobilises a holder exactly as
+        // setAddressFrozen does, while leaving isFrozen() false. Deny only on FULL immobilisation:
+        // a partial freeze leaves the free balance transferable on the token, so it stays tradeable
+        // here too. Denying on any partial freeze would be stricter than the asset itself.
+        (bool frozenAmountOk, bytes32 frozenWord) =
+            _staticWord(tokenAddress, abi.encodeCall(ITREXToken.getFrozenTokens, (account)));
+        if (!frozenAmountOk) return (false, true);
+
+        (bool balanceOk, bytes32 balanceWord) =
+            _staticWord(tokenAddress, abi.encodeCall(ITREXToken.balanceOf, (account)));
+        if (!balanceOk) return (false, true);
+
+        uint256 frozenAmount = uint256(frozenWord);
+        if (frozenAmount != 0 && frozenAmount >= uint256(balanceWord)) return (true, true);
+
+        return (true, false);
     }
 
     /// @notice Whether `account` holds a valid LP_CLAIM_TOPIC claim under `identityRegistry`.
