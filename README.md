@@ -91,9 +91,16 @@ is therefore a total function, and every failure degrades to a strictly lower-or
   Uniswap's official Universal Router / `PermissionedPositionManager` should ever be allowed.
 - **`LP_CLAIM_TOPIC`** is an immutable constructor argument (must be non-zero) — the checker is
   deployed once per intended LP claim topic.
-- The checker's trust root is whatever `tokenAddress` reports as its `identityRegistry()` and, in turn,
-  that registry's `issuersRegistry()`. Wrapping a hostile token is out of the checker's control (that is
-  the adapter owner's responsibility); the checker degrades safely (returns `NONE`/`SWAP_ALLOWED`).
+- **Token and registry governance are fully trusted, and that trust is total: they can grant, not
+  only deny.** The trust root is re-read on every call and never pinned. A token owner who repoints
+  `identityRegistry()`, or empties the required-topic set on the `ClaimTopicsRegistry`, obtains
+  `SWAP_ALLOWED | LIQUIDITY_ALLOWED` for an arbitrary address — not merely denial. Vetting the token,
+  its registry subtree and their governance keys before wrapping is the adapter owner's
+  responsibility, as is checking that the required-topic set is non-empty: a suite deployed with zero
+  claim topics is open by configuration, with no attacker involved.
+- **What the checker guarantees is about malfunction, not malice.** A broken chain (revert, missing
+  contract, malformed return data, return bomb, gas bomb) degrades to a strictly lower-or-equal
+  permission — see [`checkAllowlist` never reverts](#checkallowlist-never-reverts) — never a higher one.
 - The **OnchainID is untrusted**: it is user-controlled and may return a forged `issuer`/`signature`/
   `data` tuple, revert, or return unbounded data. Only the `TrustedIssuersRegistry` decides who may
   attest an LP claim.
