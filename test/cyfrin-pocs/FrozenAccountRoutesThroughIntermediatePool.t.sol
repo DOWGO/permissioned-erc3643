@@ -27,9 +27,7 @@ import {
     PermissionsAdapterFactory
 } from "@uniswap/v4-periphery/src/hooks/permissionedPools/PermissionsAdapterFactory.sol";
 import {PermissionedHooks} from "@uniswap/v4-periphery/src/hooks/permissionedPools/PermissionedHooks.sol";
-import {
-    PermissionedV4Router
-} from "@uniswap/v4-periphery/src/hooks/permissionedPools/PermissionedV4Router.sol";
+import {PermissionedV4Router} from "@uniswap/v4-periphery/src/hooks/permissionedPools/PermissionedV4Router.sol";
 import {
     IPermissionsAdapter
 } from "@uniswap/v4-periphery/src/hooks/permissionedPools/interfaces/IPermissionsAdapter.sol";
@@ -298,7 +296,8 @@ contract FrozenAccountRoutesThroughIntermediatePoolTest is Test {
         require(address(hook) == hookAddr, "hook address mismatch");
 
         // ── Routers ─────────────────────────────────────────────────────────
-        router = new TestPermissionedRouter(IPoolManager(address(manager)), IPermissionsAdapterFactory(address(factory)));
+        router =
+            new TestPermissionedRouter(IPoolManager(address(manager)), IPermissionsAdapterFactory(address(factory)));
         lpRouter = new LiquidityRouter(IPoolManager(address(manager)), adapter, IERC20(address(underlying)));
         adapter.updateAllowedWrapper(address(router), true);
         adapter.updateAllowedWrapper(address(lpRouter), true);
@@ -346,10 +345,7 @@ contract FrozenAccountRoutesThroughIntermediatePoolTest is Test {
         path[1] = PathKey(Currency.wrap(address(tokenB)), 3000, 60, IHooks(address(hook)), bytes(""));
 
         IV4Router.ExactInputParams memory params = IV4Router.ExactInputParams({
-            currencyIn: Currency.wrap(address(tokenA)),
-            path: path,
-            amountIn: amountIn,
-            amountOutMinimum: 0
+            currencyIn: Currency.wrap(address(tokenA)), path: path, amountIn: amountIn, amountOutMinimum: 0
         });
 
         bytes memory actions =
@@ -367,10 +363,7 @@ contract FrozenAccountRoutesThroughIntermediatePoolTest is Test {
         path[0] = PathKey(Currency.wrap(address(adapter)), 3000, 60, IHooks(address(hook)), bytes(""));
 
         IV4Router.ExactInputParams memory params = IV4Router.ExactInputParams({
-            currencyIn: Currency.wrap(address(tokenA)),
-            path: path,
-            amountIn: amountIn,
-            amountOutMinimum: 0
+            currencyIn: Currency.wrap(address(tokenA)), path: path, amountIn: amountIn, amountOutMinimum: 0
         });
 
         bytes memory actions =
@@ -396,10 +389,7 @@ contract FrozenAccountRoutesThroughIntermediatePoolTest is Test {
         // The checker now reads the token's own control surface, so it denies outright. Before the
         // mitigation it granted SWAP_ALLOWED here, because isVerified knows nothing of freeze.
         PermissionFlag flags = checker.checkAllowlist(trader, address(underlying));
-        assertTrue(
-            flags == PermissionFlags.NONE,
-            "REGRESSION: checker grants a frozen account of a paused token"
-        );
+        assertTrue(flags == PermissionFlags.NONE, "REGRESSION: checker grants a frozen account of a paused token");
 
         uint256 balanceBefore = tokenB.balanceOf(trader);
 
@@ -454,9 +444,7 @@ contract FrozenAccountRoutesThroughIntermediatePoolTest is Test {
         vm.prank(trader);
         vm.expectRevert();
         router.executeActions(_multiHopPlan(1e15));
-        assertEq(
-            tokenB.balanceOf(trader), balanceBefore, "REGRESSION: intermediate route completes while paused"
-        );
+        assertEq(tokenB.balanceOf(trader), balanceBefore, "REGRESSION: intermediate route completes while paused");
     }
 
     /// @notice Control. The hook gate is live on the multi-hop route: revoking verification blocks

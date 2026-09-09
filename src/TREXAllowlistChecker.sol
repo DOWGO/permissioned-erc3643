@@ -153,8 +153,7 @@ contract TREXAllowlistChecker is BaseAllowlistChecker {
         if (!pausedOk) return (false, true);
         if (isPaused) return (true, true);
 
-        (bool frozenOk, bool walletFrozen) =
-            _staticBool(tokenAddress, abi.encodeCall(ITREXToken.isFrozen, (account)));
+        (bool frozenOk, bool walletFrozen) = _staticBool(tokenAddress, abi.encodeCall(ITREXToken.isFrozen, (account)));
         if (!frozenOk) return (false, true);
         if (walletFrozen) return (true, true);
 

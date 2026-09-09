@@ -76,9 +76,8 @@ contract GasBurningIssuerDeniesLaterIssuersTest is Test {
     }
 
     function _flags() internal view returns (PermissionFlag) {
-        (bool ok, bytes memory ret) = address(checker).staticcall(
-            abi.encodeWithSelector(TREXAllowlistChecker.checkAllowlist.selector, bob, address(token))
-        );
+        (bool ok, bytes memory ret) = address(checker)
+            .staticcall(abi.encodeWithSelector(TREXAllowlistChecker.checkAllowlist.selector, bob, address(token)));
         assertTrue(ok, "checkAllowlist must stay total and never propagate a revert");
         return PermissionFlag.wrap(abi.decode(ret, (bytes2)));
     }
@@ -100,8 +99,7 @@ contract GasBurningIssuerDeniesLaterIssuersTest is Test {
         // Same two issuers, same two claims, same validity - only the registry's order differs
         _world(true);
         assertTrue(
-            _hasLiquidity(),
-            "REGRESSION: a gas-burning issuer destroyed an honest issuer's independently valid claim"
+            _hasLiquidity(), "REGRESSION: a gas-burning issuer destroyed an honest issuer's independently valid claim"
         );
     }
 
