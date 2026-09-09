@@ -123,6 +123,11 @@ contract TREXAllowlistChecker is BaseAllowlistChecker {
     ///      Replicates ERC-3643 claim validation for LP_CLAIM_TOPIC: for each trusted issuer of the
     ///      topic, look up the canonical claim id, confirm the stored claim matches, and ask the
     ///      issuer whether it is still valid. Existence alone is never sufficient.
+    ///
+    ///      Each issuer is read through a length-validated staticcall carrying only its fair share
+    ///      of the surviving budget, so neither a malformed answer nor an exhausted stipend can
+    ///      cost the remaining trusted issuers their turn. What an issuer can deny is the claim it
+    ///      attests, never a claim attested by someone else.
     function probeLpClaim(address identityRegistry, address account) external view returns (bool) {
         ITREXIdentityRegistry idReg = ITREXIdentityRegistry(identityRegistry);
 
@@ -135,7 +140,8 @@ contract TREXAllowlistChecker is BaseAllowlistChecker {
         address[] memory trustedIssuers =
             ITREXTrustedIssuersRegistry(issuersRegistry).getTrustedIssuersForClaimTopic(LP_CLAIM_TOPIC);
 
-        for (uint256 i = 0; i < trustedIssuers.length; i++) {
+        uint256 issuerCount = trustedIssuers.length;
+        for (uint256 i = 0; i < issuerCount; i++) {
             address trustedIssuer = trustedIssuers[i];
             bytes32 claimId = keccak256(abi.encode(trustedIssuer, LP_CLAIM_TOPIC));
             (uint256 topic,, address issuer, bytes memory sig, bytes memory data,) = ITREXIdentity(id).getClaim(claimId);
@@ -152,8 +158,17 @@ contract TREXAllowlistChecker is BaseAllowlistChecker {
             // short word or a non-canonical bool would revert probeLpClaim uncaught and deny the
             // remaining trusted issuers their turn. An explicit returndatasize check has no decode
             // left to fail, so a malformed issuer now costs only its own claim.
-            (bool answered, bool valid) =
-                _staticBool(issuer, abi.encodeCall(ITREXClaimIssuer.isClaimValid, (id, LP_CLAIM_TOPIC, sig, data)));
+            // Bound what this issuer may spend. Unbounded, EIP-150 hands it 63/64 of everything
+            // left, and its out-of-gas — absorbed here — leaves the NEXT iteration's `getClaim` to
+            // die on the surviving sixty-fourth. That one sits in no guarded frame, so it aborts
+            // the whole scan and destroys a later honest issuer's independently valid claim.
+            // Dividing the forwardable share by the iterations still owed a turn makes an
+            // out-of-gas issuer reach the next iteration exactly as a reverting one already does.
+            (bool answered, bool valid) = _staticBool(
+                issuer,
+                abi.encodeCall(ITREXClaimIssuer.isClaimValid, (id, LP_CLAIM_TOPIC, sig, data)),
+                (gasleft() * 63) / (64 * (issuerCount - i))
+            );
             if (answered && valid) return true;
         }
         return false;
@@ -166,10 +181,22 @@ contract TREXAllowlistChecker is BaseAllowlistChecker {
     ///      Gas is forwarded in full: `IdentityRegistry` may sit behind a deep proxy, and a stipend
     ///      tight enough to matter would break legitimate deployments.
     function _staticWord(address target, bytes memory callData) private view returns (bool ok, bytes32 word) {
+        // type(uint256).max is the "forward everything" idiom: EIP-150 caps the callee at 63/64 of
+        // what remains, exactly as `gas()` did.
+        return _staticWord(target, callData, type(uint256).max);
+    }
+
+    /// @dev As `_staticWord`, capping what the callee may spend. A stipend the callee exceeds costs
+    ///      only `ok == false` — the out-of-gas dies in the callee's frame, never in this one.
+    function _staticWord(address target, bytes memory callData, uint256 gasLimit)
+        private
+        view
+        returns (bool ok, bytes32 word)
+    {
         if (target.code.length == 0) return (false, bytes32(0));
 
         assembly ("memory-safe") {
-            let success := staticcall(gas(), target, add(callData, 0x20), mload(callData), 0x00, 0x20)
+            let success := staticcall(gasLimit, target, add(callData, 0x20), mload(callData), 0x00, 0x20)
             if and(success, eq(returndatasize(), 0x20)) {
                 ok := 1
                 word := mload(0x00)
@@ -187,8 +214,17 @@ contract TREXAllowlistChecker is BaseAllowlistChecker {
 
     /// @dev As `_staticWord`, rejecting a word that is not a canonical boolean.
     function _staticBool(address target, bytes memory callData) private view returns (bool ok, bool value) {
+        return _staticBool(target, callData, type(uint256).max);
+    }
+
+    /// @dev As `_staticBool`, capping what the callee may spend.
+    function _staticBool(address target, bytes memory callData, uint256 gasLimit)
+        private
+        view
+        returns (bool ok, bool value)
+    {
         bytes32 word;
-        (ok, word) = _staticWord(target, callData);
+        (ok, word) = _staticWord(target, callData, gasLimit);
         if (!ok || uint256(word) > 1) return (false, false);
         value = uint256(word) == 1;
     }
