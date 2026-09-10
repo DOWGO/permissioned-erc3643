@@ -82,6 +82,15 @@ contract TREXAllowlistChecker is BaseAllowlistChecker {
     ///      are typically 1–3) while capping what a hostile identity or issuer can burn on the swap
     ///      hot path. Exceeding it costs the liquidity flag only; `probeLpClaim` is public so the
     ///      cause stays diagnosable off-chain.
+    ///
+    ///      This bounds hostile behaviour, but it is not a bound on the cost of ordinary use, and it
+    ///      is per call rather than per transaction. `IAllowlistChecker` carries no requested
+    ///      permission — `PermissionsAdapter.isAllowed` receives one and masks only after the call
+    ///      returns — so `beforeSwap` resolves the liquidity flag too and the hook discards it.
+    ///      `PermissionedHooks._verifyAllowlist` asks once per permissioned pool currency, and a
+    ///      pool may pair two; `PermissionedV4Router._pay` asks again when the currency being
+    ///      settled is the adapter. Every ordinary swap therefore pays for the LP scan, and that
+    ///      cost grows with the trusted-issuer count for a topic the swap decision does not use.
     uint256 private constant LP_PROBE_GAS = 200_000;
 
     /// @dev secp256k1 group order, used to enumerate the s-complement encodings ONCHAINID accepts.

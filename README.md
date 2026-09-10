@@ -85,6 +85,34 @@ is therefore a total function, and every failure degrades to a strictly lower-or
 
 `probeLpClaim` is public and side-effect free, so a denied liquidity flag stays diagnosable off-chain.
 
+### Every swap pays for the liquidity answer
+
+`IAllowlistChecker.checkAllowlist(account, tokenAddress)` carries no requested permission.
+`PermissionsAdapter.isAllowed(account, permission)` receives one, calls the checker without it, and
+masks only after the call returns — so `beforeSwap` resolves `LIQUIDITY_ALLOWED` and the hook throws
+it away. The cost is per call, not per transaction: `PermissionedHooks._verifyAllowlist` asks once
+per permissioned pool currency and a pool may pair two, and `PermissionedV4Router._pay` asks again
+when the currency being settled is the adapter.
+
+That discarded work scales with the trusted-issuer count for the LP topic, which the swap decision
+does not use. Measured on warm state, direct `checkAllowlist` calls, for an account holding no LP
+claim — the ordinary swap case, which walks the whole issuer list:
+
+| trusted issuers for the LP topic | gas |
+|---|---|
+| 1 | 17,856 |
+| 3 | 24,952 |
+| 7 | 44,157 |
+| 12 | 68,190 |
+
+Roughly 4,800 gas per additional issuer, paid by every swapper, once per permissioned currency.
+Nothing here is at risk and no permission is wrongly granted or withheld by it, but the number should
+inform how many issuers a deployment accredits on the LP topic.
+
+Removing the work needs the requested `PermissionFlag` in the upstream interface so the adapter can
+pass down what it already knows. We have raised that with Uniswap; there is no checker-side version,
+since the adapter calls `checkAllowlist(account, tokenAddress)` and nothing else.
+
 ## Trust model
 
 - **Gating is router-gated, not `tx.origin`-based.** The upstream `PermissionedHooks` reads the real
