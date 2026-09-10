@@ -60,6 +60,8 @@ interface ITREXClaimIssuer {
         external
         view
         returns (bool);
+    /// @return True if this exact signature blob has been revoked by the issuer.
+    function isClaimRevoked(bytes calldata _sig) external view returns (bool);
 }
 
 /// @title TREXAllowlistChecker
@@ -85,6 +87,9 @@ contract TREXAllowlistChecker is BaseAllowlistChecker {
     ///      hot path. Exceeding it costs the liquidity flag only; `probeLpClaim` is public so the
     ///      cause stays diagnosable off-chain.
     uint256 private constant LP_PROBE_GAS = 200_000;
+
+    /// @dev secp256k1 group order, used to enumerate the s-complement encodings ONCHAINID accepts.
+    uint256 private constant _SECP256K1_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141;
 
     /// @notice Thrown when the checker is deployed with an unset (zero) LP claim topic.
     error ZeroClaimTopic();
@@ -238,9 +243,77 @@ contract TREXAllowlistChecker is BaseAllowlistChecker {
                 abi.encodeCall(ITREXClaimIssuer.isClaimValid, (id, LP_CLAIM_TOPIC, sig, data)),
                 (gasleft() * 63) / (64 * (issuerCount - i))
             );
-            if (answered && valid) return true;
+            if (!answered || !valid) continue;
+
+            // The issuer vouched for the exact bytes the identity stored. That is not the question
+            // that decides revocation: ONCHAINID keys revocation on those bytes, while its
+            // getRecoveredAddress accepts four encodings of the same signature (a v below 27 is
+            // normalised by adding 27, and s carries no low-half bound). Revoking one leaves the
+            // other three answering "not revoked", and the holder re-installs the claim under a
+            // re-encoding. Ask the issuer about the whole equivalence class instead.
+            // Bounded for the same reason the validity read is: this path can `continue`, and a
+            // gas-burning answer here would leave the next iteration's unguarded `getClaim` to die
+            // on the remainder. A quarter of this slot's fair share per candidate — a byte-keyed
+            // revocation lookup is a single mapping read.
+            if (_equivalentEncodingRevoked(issuer, sig, (gasleft() * 63) / (64 * (issuerCount - i) * 4))) {
+                continue;
+            }
+
+            return true;
         }
         return false;
+    }
+
+    /// @dev True if the issuer has revoked ANY byte encoding of the ECDSA signature `sig` that its own
+    ///      `getRecoveredAddress` would accept. A blob that is not a 65-byte ECDSA encoding is left
+    ///      entirely to the issuer's semantics and is never denied here, so a trusted issuer using a
+    ///      different signature scheme is unaffected.
+    function _equivalentEncodingRevoked(address issuer, bytes memory sig, uint256 gasPerCandidate)
+        private
+        view
+        returns (bool)
+    {
+        if (sig.length != 65) return false;
+
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+        assembly ("memory-safe") {
+            r := mload(add(sig, 32))
+            s := mload(add(sig, 64))
+            v := byte(0, mload(add(sig, 96)))
+        }
+
+        // Mirror ONCHAINID's own normalisation, so the enumerated class is exactly the set it accepts.
+        unchecked {
+            if (v < 27) v += 27;
+        }
+        if (v != 27 && v != 28) return false;
+
+        uint256 su = uint256(s);
+        if (su == 0 || su >= _SECP256K1_N) return false;
+
+        bytes32 sFlip = bytes32(_SECP256K1_N - su);
+        uint8 vFlip = v == 27 ? 28 : 27;
+
+        unchecked {
+            if (_revoked(issuer, abi.encodePacked(r, s, v), gasPerCandidate)) return true;
+            if (_revoked(issuer, abi.encodePacked(r, s, uint8(v - 27)), gasPerCandidate)) return true;
+            if (_revoked(issuer, abi.encodePacked(r, sFlip, vFlip), gasPerCandidate)) return true;
+            if (_revoked(issuer, abi.encodePacked(r, sFlip, uint8(vFlip - 27)), gasPerCandidate)) return true;
+        }
+        return false;
+    }
+
+    /// @dev An issuer that does not implement `isClaimRevoked`, answers unparseably, or exceeds its
+    ///      stipend is read as "nothing revoked": it does not key revocation on signature bytes, so
+    ///      the question does not apply to it. Never denies an honest claim, never reverts. The
+    ///      stipend makes that fail-open reachable under gas starvation as well — deliberate, since
+    ///      the alternative is letting one issuer's answer cost the remaining issuers their turn.
+    function _revoked(address issuer, bytes memory candidate, uint256 gasLimit) private view returns (bool) {
+        (bool ok, bool value) =
+            _staticBool(issuer, abi.encodeCall(ITREXClaimIssuer.isClaimRevoked, (candidate)), gasLimit);
+        return ok && value;
     }
 
     /// @dev Staticcall reading exactly one word, with no path that can revert in this frame.
