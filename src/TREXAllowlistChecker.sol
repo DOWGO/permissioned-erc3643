@@ -15,10 +15,6 @@ interface ITREXToken {
     function paused() external view returns (bool);
     /// @return True while an agent has frozen this wallet outright.
     function isFrozen(address _userAddress) external view returns (bool);
-    /// @return The immobilised portion of this wallet's balance.
-    function getFrozenTokens(address _userAddress) external view returns (uint256);
-    /// @return The wallet's total balance, frozen portion included.
-    function balanceOf(address _userAddress) external view returns (uint256);
 }
 
 /// @notice Minimal slice of the ERC-3643 IdentityRegistry surface used by the checker.
@@ -162,21 +158,12 @@ contract TREXAllowlistChecker is BaseAllowlistChecker {
         if (!frozenOk) return (false, true);
         if (walletFrozen) return (true, true);
 
-        // freezePartialTokens(account, balanceOf(account)) immobilises a holder exactly as
-        // setAddressFrozen does, while leaving isFrozen() false. Deny only on FULL immobilisation:
-        // a partial freeze leaves the free balance transferable on the token, so it stays tradeable
-        // here too. Denying on any partial freeze would be stricter than the asset itself.
-        (bool frozenAmountOk, bytes32 frozenWord) =
-            _staticWord(tokenAddress, abi.encodeCall(ITREXToken.getFrozenTokens, (account)));
-        if (!frozenAmountOk) return (false, true);
-
-        (bool balanceOk, bytes32 balanceWord) =
-            _staticWord(tokenAddress, abi.encodeCall(ITREXToken.balanceOf, (account)));
-        if (!balanceOk) return (false, true);
-
-        uint256 frozenAmount = uint256(frozenWord);
-        if (frozenAmount != 0 && frozenAmount >= uint256(balanceWord)) return (true, true);
-
+        // A partial freeze is NOT read here, at any size. `Token.transfer` applies
+        // `_frozenTokens[from]` to the SENDER only, while `setAddressFrozen` is tested on `_to` as
+        // well — so a fully immobilised holder can still receive on the token itself. A
+        // PermissionFlag carries no direction, so denying on full immobilisation would refuse an
+        // acquisition the asset permits. An agent wanting the account out of the venue entirely has
+        // setAddressFrozen, which is honoured above.
         return (true, false);
     }
 

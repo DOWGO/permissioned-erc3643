@@ -307,25 +307,28 @@ contract TREXAllowlistCheckerTest is Test {
         _assertSwapOnly(checker.checkAllowlist(bob, address(token)));
     }
 
-    /// @dev freezePartialTokens(account, balanceOf(account)) immobilises a holder exactly as
-    ///      setAddressFrozen does while leaving isFrozen() false. Without this branch it is an exact
-    ///      substitute for the control above that the checker cannot see.
-    function test_fully_immobilised_wallet_returns_NONE() public {
-        registry.setVerified(alice, true);
-        token.setBalances(alice, 1_000, 1_000);
-        assertTrue(
-            checker.checkAllowlist(alice, address(token)) == PermissionFlags.NONE,
-            "a fully immobilised wallet must deny every pool permission"
-        );
-    }
-
-    /// @dev A partial freeze leaves the free balance transferable on the token, so it must stay
-    ///      tradeable here. Denying on any partial freeze would be stricter than the asset itself.
-    function test_partially_frozen_wallet_with_free_balance_still_trades() public {
+    /// @dev A partial freeze is not read at any size, full immobilisation included.
+    ///      `Token.transfer` applies `_frozenTokens[from]` to the SENDER only, while
+    ///      `setAddressFrozen` is tested on `_to` as well — so a fully immobilised holder can still
+    ///      RECEIVE on the token. A PermissionFlag carries no direction, so denying here would
+    ///      refuse an acquisition the asset itself permits.
+    function test_partial_freeze_does_not_gate_the_pool_at_any_size() public {
         registry.setVerified(alice, true);
         aliceId.addClaim(LP_TOPIC, address(trustedIssuer), SIG, DATA);
+
         token.setBalances(alice, 1_000, 999);
         _assertSwapAndLiquidity(checker.checkAllowlist(alice, address(token)));
+
+        // Fully immobilised: still permitted, for the reason above.
+        token.setBalances(alice, 1_000, 1_000);
+        _assertSwapAndLiquidity(checker.checkAllowlist(alice, address(token)));
+
+        // The control an agent has for removing the account from the venue outright.
+        token.setAddressFrozen(alice, true);
+        assertTrue(
+            checker.checkAllowlist(alice, address(token)) == PermissionFlags.NONE,
+            "setAddressFrozen is the control that denies, and it is honoured"
+        );
     }
 
     /// @dev Fail-closed: a token that stops answering a control getter denies rather than defaulting

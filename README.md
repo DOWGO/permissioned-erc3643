@@ -44,15 +44,17 @@ unwrapped, and the ERC-3643 token is never called. `checkAllowlist` therefore re
 itself, through `probeTokenControls` — public and side-effect free, so a denial stays diagnosable
 off-chain.
 
-Denied: `paused()`, `isFrozen(account)`, and full immobilisation
-(`getFrozenTokens(account) >= balanceOf(account)`, non-zero) — the last because
-`freezePartialTokens(account, balanceOf(account))` is otherwise an exact substitute for
-`setAddressFrozen` that the checker cannot see.
+Denied: `paused()` and `isFrozen(account)`.
 
 Deliberately **not** covered:
 
-- **A partial freeze below the full balance still trades.** The free balance remains transferable on
-  the token, so denying the whole pool permission would be stricter than the asset itself.
+- **A partial freeze is not read, at any size — full immobilisation included.** `Token.transfer`
+  applies `_frozenTokens[from]` to the sender only, while `setAddressFrozen` is tested on `_to` as
+  well, so a fully immobilised holder can still receive on the token itself. A `PermissionFlag`
+  carries no direction, so denying here would refuse an acquisition the asset permits. An agent that
+  wants the account out of the venue entirely has `setAddressFrozen`, which is honoured.
+  `freezePartialTokens` is a balance control, not an admission control, and has no venue-level
+  effect — that is an operating rule for agents, not something the checker can enforce.
 - **`ICompliance.canTransfer` and the counterparty's own verification** are outside the flag model:
   both are amount- and counterparty-dependent, and a `PermissionFlag` is neither.
 - **The exit path is not permissioned at all** (no `beforeRemoveLiquidity` in the hook's permissions,
@@ -60,7 +62,7 @@ Deliberately **not** covered:
   holder with an existing position can still unwind it. A global pause contains that case, since the
   unwrap is a real transfer; an address freeze does not.
 
-**This reader fails closed.** A token that stops answering any of the four getters resolves to `NONE`
+**This reader fails closed.** A token that stops answering either getter resolves to `NONE`
 for every account — it halts that token's pools rather than defaulting to unpaused and unfrozen,
 because a fail-open default would restore the bypass whenever the dependency misbehaves. A token that
 does not implement the ERC-3643 `IToken` control surface at all cannot be wrapped; the adapter owner's
