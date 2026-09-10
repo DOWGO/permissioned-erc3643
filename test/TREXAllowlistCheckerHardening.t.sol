@@ -77,8 +77,16 @@ contract HostileIdentityRegistry {
         _issuersRegistry = reg;
     }
 
+    bool public burnIsVerified;
+
     function setRevertIsVerified(bool v) external {
         revertIsVerified = v;
+    }
+
+    /// @dev An `isVerified` that consumes its frame instead of answering — a deliberate bomb, or an
+    ///      honest registry whose verification loop reaches an expensive trusted issuer.
+    function setBurnIsVerified(bool v) external {
+        burnIsVerified = v;
     }
 
     function setRevertIdentity(bool v) external {
@@ -91,6 +99,12 @@ contract HostileIdentityRegistry {
 
     function isVerified(address user) external view returns (bool) {
         require(!revertIsVerified, "isVerified boom");
+        if (burnIsVerified) {
+            uint256 x;
+            while (true) {
+                x = uint256(keccak256(abi.encode(x)));
+            }
+        }
         return verified[user];
     }
 
@@ -193,6 +207,27 @@ contract GasBombIssuer {
 /// @title Fail-closed hardening suite
 /// @notice Every test asserts the *absence of a revert* first: checkAllowlist must be a total
 ///         function, degrading to a lower-or-equal permission instead of bricking the callback.
+/// @dev A registry reached through several forwarding hops, the deployment shape the full-gas
+///      forward exists for. Each hop costs gas the checker cannot predict.
+contract DeepProxyRegistry {
+    address private immutable target;
+
+    constructor(address t) {
+        target = t;
+    }
+
+    fallback() external {
+        address t = target;
+        assembly {
+            calldatacopy(0, 0, calldatasize())
+            let ok := staticcall(gas(), t, 0, calldatasize(), 0, 0)
+            returndatacopy(0, 0, returndatasize())
+            if iszero(ok) { revert(0, returndatasize()) }
+            return(0, returndatasize())
+        }
+    }
+}
+
 contract TREXAllowlistCheckerHardeningTest is Test {
     uint256 constant LP_TOPIC = 42;
     bytes constant SIG = hex"beef";
@@ -399,6 +434,50 @@ contract TREXAllowlistCheckerHardeningTest is Test {
         assertTrue(
             (flags & PermissionFlags.LIQUIDITY_ALLOWED) == PermissionFlags.LIQUIDITY_ALLOWED,
             string.concat("VULNERABLE: a malformed issuer suppressed an honest valid claim: ", ctx)
+        );
+    }
+
+    // ── swap-side read: the registry may burn its frame, not just revert ──
+
+    /// @dev The swap decision forwards all available gas, deliberately: the registry may sit behind a
+    ///      deep proxy. EIP-150 therefore hands a burning `isVerified` 63/64 of the frame. What the
+    ///      checker owes the hook is that the surviving sixty-fourth is enough to return a flag —
+    ///      a revert here would brick the pool for everyone rather than deny one caller.
+    function test_isVerified_burns_gas_returns_NONE_without_reverting() public {
+        registry.setBurnIsVerified(true);
+        _assertNone(_checkNoRevert(bob, address(token)), "gas-burning isVerified");
+    }
+
+    /// @dev The same, swept across the budgets a transaction might supply. The checker frame must
+    ///      survive at every one of them; whether the burn also denies is the registry's business,
+    ///      not ours.
+    function test_checker_frame_survives_a_burning_registry_at_every_budget() public {
+        registry.setBurnIsVerified(true);
+        for (uint256 cap = 100_000; cap <= 5_000_000; cap += 400_000) {
+            (bool ok,) = address(checker).staticcall{gas: cap}(
+                abi.encodeWithSelector(TREXAllowlistChecker.checkAllowlist.selector, bob, address(token))
+            );
+            assertTrue(ok, string.concat("checkAllowlist reverted at gas cap ", vm.toString(cap)));
+        }
+    }
+
+    /// @dev A stipend on the swap-side read is not the remedy, and this pins why: capping the forward
+    ///      hands the callee the cap and never more, so a holder behind a deep proxy — or behind a
+    ///      registry loop that must walk past an expensive issuer to reach their valid claim — could
+    ///      not be rescued by supplying more gas. Overprovisioning has to stay possible.
+    function test_full_gas_forward_lets_a_deep_registry_still_answer() public {
+        DeepProxyRegistry deep = new DeepProxyRegistry(address(registry));
+        MockToken deepToken = new MockToken(address(deep));
+        registry.setVerified(bob, true);
+
+        (bool ok, bytes memory ret) = address(checker).staticcall{gas: 3_000_000}(
+            abi.encodeWithSelector(TREXAllowlistChecker.checkAllowlist.selector, bob, address(deepToken))
+        );
+        assertTrue(ok, "checkAllowlist must not revert on a deep registry");
+        PermissionFlag flags = PermissionFlag.wrap(abi.decode(ret, (bytes2)));
+        assertTrue(
+            (flags & PermissionFlags.SWAP_ALLOWED) == PermissionFlags.SWAP_ALLOWED,
+            "a verified holder behind a deep proxy keeps the swap right"
         );
     }
 

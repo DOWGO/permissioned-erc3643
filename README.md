@@ -137,9 +137,25 @@ since the adapter calls `checkAllowlist(account, tokenAddress)` and nothing else
   are whatever the identity returned, and ONCHAINID keys revocation on those exact bytes, so
   `ClaimIssuer::revokeClaim` is not binding against an identity that answers `getClaim` differently
   per caller. See [Issuer operations](#issuer-operations).
-- **Claim issuers are semi-trusted**: registry-curated, but arbitrary third-party contracts. One that
-  reverts, returns a malformed answer or burns gas denies its own claim holders their liquidity flag —
-  it cannot deny anyone their swap right, nor stall the pool.
+- **Claim issuers are semi-trusted**: registry-curated, but arbitrary third-party contracts. The blast
+  radius depends on which topic the issuer is trusted for.
+  - **`LP_CLAIM_TOPIC`** — one that reverts, answers malformedly or burns gas costs its own claim
+    holders the liquidity flag and nothing else. `probeLpClaim` runs in its own gas-bounded frame,
+    each issuer is read through a length-validated staticcall, and each is bounded to its share of
+    that frame.
+  - **A required verification topic** — the radius is larger, and the mechanism is upstream. The swap
+    decision delegates to `IdentityRegistry.isVerified`, whose loop catches a failing `isClaimValid`
+    and then calls the next `getClaim` unguarded. An issuer that burns its frame — deliberately, or
+    by being expensive — leaves that loop roughly a sixty-fourth of what the transaction supplied,
+    typically too little to reach a later trusted issuer's claim. A holder who accepted a claim from
+    that issuer can therefore be denied `SWAP_ALLOWED`, and pays for the burn. Holders with no claim
+    from it are unaffected: the derived claim id reads back empty and the loop moves on. The same
+    issuer denies those holders `transfer` of the token itself, which calls the same uncapped
+    `isVerified` — this is a property of the token's registry, not of the pool. The remedies are
+    operational: de-register the issuer, or the holder removes the claim from their ONCHAINID.
+
+  Neither case stalls the pool: `checkAllowlist` still returns a flag and the hook denies the caller.
+  Do **not** answer this with a gas stipend on the swap-side read — see `_staticWord`.
 
 ### Issuer operations
 

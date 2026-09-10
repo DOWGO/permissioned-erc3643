@@ -317,7 +317,12 @@ contract TREXAllowlistChecker is BaseAllowlistChecker {
     ///      copied (return-bomb proof), and the explicit `returndatasize` check replaces an ABI decode
     ///      — which Solidity's try/catch cannot guard, since it runs in the caller's own frame.
     ///      Gas is forwarded in full: `IdentityRegistry` may sit behind a deep proxy, and a stipend
-    ///      tight enough to matter would break legitimate deployments.
+    ///      tight enough to matter would break legitimate deployments. The full forward is also what
+    ///      preserves the caller's ability to overprovision past a gas-burning issuer inside the
+    ///      registry's own verification loop, whose next `getClaim` after a caught out-of-gas is
+    ///      unguarded. A capped forward hands the callee the cap and never more, so a later valid
+    ///      claim would become unreachable at any transaction gas limit — the denial would stop
+    ///      being a toll and become a wall. See README, "Trust model".
     function _staticWord(address target, bytes memory callData) private view returns (bool ok, bytes32 word) {
         // type(uint256).max is the "forward everything" idiom: EIP-150 caps the callee at 63/64 of
         // what remains, exactly as `gas()` did.
