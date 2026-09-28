@@ -24,8 +24,8 @@ into the v4 `PermissionFlag` model consumed by the Uniswap-official `Permissions
   claim topics, valid + non-revoked) is delegated to the registry; the emergency controls are read from
   the token, because they live in its storage and the registry knows nothing of them.
 - **`LIQUIDITY_ALLOWED`** additionally iff `account`'s OnchainID holds a **valid** claim on the
-  configured `LP_CLAIM_TOPIC`. Validity is checked the same way ERC-3643's `IdentityRegistry.isVerified`
-  does: the claim must come from an issuer in the token's `TrustedIssuersRegistry` and pass
+  configured `LP_CLAIM_TOPIC`. Validity follows ERC-3643's `IdentityRegistry.isVerified`: the claim id is
+  derived from each issuer in the token's `TrustedIssuersRegistry`, and the claim must pass
   `IClaimIssuer.isClaimValid` (not merely exist). The claim body must additionally *name* the trusted
   issuer its claim id was derived from — validity is re-derived from the registry, never taken from the
   identity's self-reported record.
@@ -136,7 +136,12 @@ since the adapter calls `checkAllowlist(account, tokenAddress)` and nothing else
   attest an LP claim — but only the *issuer binding* is re-derived there. The `signature` and `data`
   are whatever the identity returned, and ONCHAINID keys revocation on those exact bytes, so
   `ClaimIssuer::revokeClaim` is not binding against an identity that answers `getClaim` differently
-  per caller. See [Issuer operations](#issuer-operations).
+  per caller. See [Issuer operations](#issuer-operations). The swap decision applies no binding of its
+  own: it is exactly as strong as the deployed registry's verification, and the ERC-3643 4.x reference
+  `IdentityRegistry` does not bind a claim body to the trusted issuer its id was derived from — it
+  calls `isClaimValid` on whichever `issuer` the stored tuple names. `SWAP_ALLOWED` therefore holds
+  only for identities registered through a canonicity check, such as registering a wallet only against
+  the identity `IdFactory.getIdentity(wallet)` returns.
 - **Claim issuers are semi-trusted**: registry-curated, but arbitrary third-party contracts. The blast
   radius depends on which topic the issuer is trusted for.
   - **`LP_CLAIM_TOPIC`** — one that reverts, answers malformedly or burns gas costs its own claim

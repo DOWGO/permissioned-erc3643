@@ -63,10 +63,12 @@ interface ITREXClaimIssuer {
 /// @title TREXAllowlistChecker
 /// @notice Maps ERC-3643 (T-REX) verification + a valid LP claim topic to a v4 PermissionFlag
 ///         for use with a PermissionsAdapter.
-/// @dev    - isVerified() => SWAP_ALLOWED (registry enforces all required topics + claim validity).
+/// @dev    - isVerified() => SWAP_ALLOWED, exactly as strong as the deployed registry's verification.
+///           The ERC-3643 4.x reference registry does not bind a claim body to the trusted issuer its id
+///           was derived from, so this holds only for identities registered through a canonicity check.
 ///         - isVerified() && a VALID claim of `LP_CLAIM_TOPIC` from a trusted issuer => + LIQUIDITY_ALLOWED.
-///         LP validation mirrors ERC-3643 IdentityRegistry.isVerified: it does not trust mere claim
-///         existence — the claim must come from a trusted issuer and pass isClaimValid (not revoked).
+///         LP validation follows ERC-3643 IdentityRegistry.isVerified — claim ids derived from each
+///         trusted issuer, isClaimValid required (not revoked) — and additionally binds the claim to that issuer.
 ///
 ///         `checkAllowlist` is a TOTAL function: it runs inside the PoolManager's beforeSwap /
 ///         beforeAddLiquidity callback, where a revert does not deny the caller — it bricks the pool
