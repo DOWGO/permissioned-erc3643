@@ -4,6 +4,9 @@ out = "out"
 libs = ["lib"]
 solc_version = "0.8.26"
 evm_version = "cancun"
+# Each top-level test call runs in its own transaction, so storage is cold as for a real call.
+# Forge made this the default in 1.8; pinned so results do not depend on the installed version.
+isolate = true
 # v4-periphery PermissionedPositionManager + PermissionedV4Router runtime bytecodes
 # exceed the EIP-170 24,576-byte limit without aggressive optimization. The upstream
 # Uniswap config compiles posm with via_ir + 30000 runs — we mirror that here so the
