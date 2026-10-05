@@ -14,6 +14,7 @@ into the v4 `PermissionFlag` model consumed by the Uniswap-official `Permissions
 | `lib/v4-core` | Uniswap v4 core, a git submodule pinned to public upstream. |
 | `lib/v4-periphery` | Uniswap periphery (the PermissionedPools primitive), committed in-tree. Trust root. |
 | `test/**` | Unit + integration + live-fork tests demonstrating the intended behavior. |
+| `test/fixtures/` | Creation bytecode of the published ONCHAINID 2.2.1 and T-REX 4.1.6 npm artifacts (third-party, GPL-3.0, vendored verbatim) and `DeployedShape`, which builds what the deployer ships. |
 
 ## What `TREXAllowlistChecker` does
 
