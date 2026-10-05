@@ -79,11 +79,23 @@ contract TREXAllowlistChecker is BaseAllowlistChecker {
     /// @notice The OnchainID claim topic that gates liquidity provision.
     uint256 public immutable LP_CLAIM_TOPIC;
 
-    /// @dev Gas handed to the isolated LP probe. Sized well above a realistic deployment (a claim
-    ///      lookup plus an ecrecover-backed isClaimValid runs ≈15k per trusted issuer, and issuer sets
-    ///      are typically 1–3) while capping what a hostile identity or issuer can burn on the swap
-    ///      hot path. Exceeding it costs the liquidity flag only; `probeLpClaim` is public so the
+    /// @dev Gas handed to the isolated LP probe, and the only bound on its scan: the issuer list is
+    ///      never truncated at an entry count. Sized for the documented envelope — ten entries in the
+    ///      LP topic's trusted-issuer list, the holder holding a claim from only one of them, `uri`
+    ///      and `data` together at most 1KB — whose edge, that claim at the last entry with a 1KB
+    ///      payload, needs about 364k on the deployed shape (T-REX 4.1.6 registries and ONCHAINID
+    ///      2.2.1 identities behind their proxies): about 23k per entry walked past and 70 per
+    ///      payload byte. A claim the holder still holds from another entry, no longer valid, costs
+    ///      about 30k more than an entry walked past, plus its own payload. Beyond the envelope the
+    ///      probe fails closed, costing the liquidity flag only; `probeLpClaim` is public so the
     ///      cause stays diagnosable off-chain.
+    ///
+    ///      The envelope assumes each trusted issuer is registered with unique topics — T-REX's
+    ///      `addTrustedIssuer` pushes the issuer once per topic entry without deduplicating, so a
+    ///      duplicate takes an entry and its gas — and that every issuer is ONCHAINID 2.2.1's
+    ///      `ClaimIssuer` deployed directly, not behind a proxy. A hostile entry costs up to about
+    ///      86k on top of a walked one (49k if it only burns the validity read), additively,
+    ///      duplicates included; the cap carries no headroom for one at the envelope's edge.
     ///
     ///      This bounds hostile behaviour, but it is not a bound on the cost of ordinary use, and it
     ///      is per call rather than per transaction. `IAllowlistChecker` carries no requested
@@ -91,9 +103,10 @@ contract TREXAllowlistChecker is BaseAllowlistChecker {
     ///      returns — so `beforeSwap` resolves the liquidity flag too and the hook discards it.
     ///      `PermissionedHooks._verifyAllowlist` asks once per permissioned pool currency, and a
     ///      pool may pair two; `PermissionedV4Router._pay` asks again when the currency being
-    ///      settled is the adapter. Every ordinary swap therefore pays for the LP scan, and that
+    ///      settled is the adapter. Every ordinary swap therefore pays for the LP scan — twice per
+    ///      permissioned pool on its route plus once more, three times for a single hop — and that
     ///      cost grows with the trusted-issuer count for a topic the swap decision does not use.
-    uint256 private constant LP_PROBE_GAS = 200_000;
+    uint256 private constant LP_PROBE_GAS = 400_000;
 
     /// @dev Gas the `isClaimValid` read may spend. ONCHAINID 2.2.1's `ClaimIssuer`, deployed
     ///      directly, answers in about 20.2k; the rest is headroom.

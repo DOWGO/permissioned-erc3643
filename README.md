@@ -86,6 +86,36 @@ is therefore a total function, and every failure degrades to a strictly lower-or
 
 `probeLpClaim` is public and side-effect free, so a denied liquidity flag stays diagnosable off-chain.
 
+### The LP probe's envelope
+
+The probe runs in a 400,000-gas frame, and that cap is the only bound on its scan: the issuer list is
+never truncated. It is sized for an envelope of ten entries in the LP topic's trusted-issuer list, the
+holder holding a claim from only one of them, with `uri` and `data` together at most 1KB. Its edge —
+that claim at the last entry, with a 1KB payload — needs about 364,000 gas on the deployed shape
+(T-REX 4.1.6 registries and ONCHAINID 2.2.1 identities behind their proxies): about 23,000 per entry
+walked past and 70 per byte of `uri` or `data`, on cold storage. The table below measures the same
+walk warm and on mocks, which is why its per-issuer figure is lower. A claim the holder still holds
+from another entry — revoked, or signed by a key since removed — costs about 30,000 more than an
+entry walked past, plus 70 per byte of its own payload. Beyond the envelope the probe fails closed,
+denying the liquidity flag and keeping the swap flag.
+
+It holds under two preconditions:
+
+- each trusted issuer is registered with unique topics — T-REX's `addTrustedIssuer` pushes the
+  issuer once per topic entry without deduplicating, so a duplicate takes an entry and its gas;
+- the issuer is ONCHAINID 2.2.1's `ClaimIssuer` deployed directly, not behind a proxy, so it answers
+  `isClaimValid` within its fixed 40,000-gas stipend and each `isClaimRevoked` within 10,000. An
+  issuer that does not answer `isClaimRevoked(bytes)` within that stipend cannot grant liquidity on
+  a 65-byte ECDSA claim.
+
+A hostile entry costs about 86,000 gas on top of a walked one (49,000 if it only burns the validity
+read). The cost is additive, duplicates included, so each hostile entry shortens the list the cap
+can reach; the cap carries no headroom for one at the envelope's edge.
+
+The stipends are constants. A gas repricing that pushed an honest issuer's reads past them would
+deny every LP claim — never the swap flag — until the adapter owner installs a re-sized checker
+through `PermissionsAdapter::updateAllowListChecker`.
+
 ### Every swap pays for the liquidity answer
 
 `IAllowlistChecker.checkAllowlist(account, tokenAddress)` carries no requested permission.
@@ -93,7 +123,9 @@ is therefore a total function, and every failure degrades to a strictly lower-or
 masks only after the call returns — so `beforeSwap` resolves `LIQUIDITY_ALLOWED` and the hook throws
 it away. The cost is per call, not per transaction: `PermissionedHooks._verifyAllowlist` asks once
 per permissioned pool currency and a pool may pair two, and `PermissionedV4Router._pay` asks again
-when the currency being settled is the adapter.
+when the currency being settled is the adapter. A swap therefore pays the probe up to twice per
+permissioned pool on its route, plus once when the settled currency is the adapter — three times for
+a single-hop swap — up to 400,000 gas each.
 
 That discarded work scales with the trusted-issuer count for the LP topic, which the swap decision
 does not use. Measured on warm state, direct `checkAllowlist` calls, for an account holding no LP

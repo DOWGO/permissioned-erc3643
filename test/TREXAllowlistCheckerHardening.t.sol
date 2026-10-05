@@ -233,8 +233,9 @@ contract TREXAllowlistCheckerHardeningTest is Test {
     bytes constant SIG = hex"beef";
     bytes constant DATA = hex"01";
 
-    /// @dev Ceiling for a single gated check, hostile dependencies included.
-    uint256 constant HOT_PATH_GAS_CEILING = 400_000;
+    /// @dev Ceiling for a single gated check, hostile dependencies included: the 400,000-gas LP probe
+    ///      cap plus the swap-side reads around it.
+    uint256 constant HOT_PATH_GAS_CEILING = 450_000;
 
     TREXAllowlistChecker checker;
     HostileIdentityRegistry registry;

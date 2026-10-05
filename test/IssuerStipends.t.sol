@@ -7,7 +7,7 @@ import {
     PermissionFlags
 } from "@uniswap/v4-periphery/src/hooks/permissionedPools/libraries/PermissionFlags.sol";
 import {MockToken} from "./TREXAllowlistChecker.t.sol";
-import {DeployedShape} from "./fixtures/DeployedShape.sol";
+import {DeployedShape, IOnchainId} from "./fixtures/DeployedShape.sol";
 
 /// @dev A trusted issuer that spends almost all of every stipend it is handed and still answers, so
 ///      each of its reads costs the checker the whole stipend. It vouches for its holder's claim, so
@@ -70,7 +70,8 @@ abstract contract LpListShape is DeployedShape {
     enum Entry {
         Filler,
         Honest,
-        Burner
+        Burner,
+        Revoked
     }
 
     address internal holder = makeAddr("holder");
@@ -78,8 +79,8 @@ abstract contract LpListShape is DeployedShape {
 
     /// @notice A verified holder on a fresh T-REX suite whose LP-topic list holds `entries` in order:
     ///         a trusted address the holder holds no claim from, a `ClaimIssuer` that signed the
-    ///         holder's claim with a `uri` of `uriLength` bytes, or a burner the holder also holds a
-    ///         claim from.
+    ///         holder's claim with a `uri` of `uriLength` bytes, a burner the holder also holds a
+    ///         claim from, or a `ClaimIssuer` that signed the holder's claim and then revoked it.
     /// @return token A token governed by that suite.
     function _lpList(Entry[] memory entries, uint256 uriLength) internal returns (address token) {
         TrexSuite memory suite = _newTrexSuite();
@@ -99,10 +100,14 @@ abstract contract LpListShape is DeployedShape {
 
     function _entry(Entry kind, address identity, uint256 uriLength, uint256 index) private returns (address) {
         if (kind == Entry.Filler) return address(uint160(0x1000 + index));
-        if (kind == Entry.Honest) {
+        if (kind == Entry.Honest || kind == Entry.Revoked) {
             ClaimIssuerFixture memory issuer = _newClaimIssuer();
             bytes memory signature = _signClaim(issuer, identity, LP_TOPIC);
-            _addClaim(identity, holderKey, issuer.issuer, LP_TOPIC, signature, uriLength);
+            _addClaim(identity, holderKey, issuer.issuer, LP_TOPIC, signature, kind == Entry.Honest ? uriLength : 0);
+            if (kind == Entry.Revoked) {
+                vm.prank(issuer.manager);
+                IOnchainId(issuer.issuer).revokeClaimBySignature(signature);
+            }
             return issuer.issuer;
         }
         StipendBurningIssuer burner = new StipendBurningIssuer();

@@ -20,14 +20,24 @@ contract NoRevocationLookupIssuer {
 /// @notice A revocation read that does not answer must count as revoked. The holder decides how much
 ///         gas is left when the read runs: every byte of the unsigned `uri` is spent in `getClaim`
 ///         first. Read as "not revoked", a starved read of the revoked encoding grants it back.
+///
+///         Two tests guard two things. The `uri` sweeps guard how the reads are funded: budgeted as
+///         a share of what is left, they starve at `uri` lengths the frame can otherwise still
+///         afford, so a fail-open read grants there. The sweeps cover every length up to the point
+///         where the frame no longer affords the unrevoked claim itself, whatever the cap. The
+///         no-lookup issuer guards the polarity: with a fixed stipend, a read only starves as the
+///         frame dies, so that test alone fails if an unanswered read stops counting as revoked.
 contract RevocationReadFailsClosedTest is DeployedShape {
     uint256 constant LP_TOPIC = 42;
     uint256 constant SECP256K1_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141;
 
-    /// @dev Past every `uri` length at which a starved read used to grant, in steps narrower than
-    ///      the narrowest such window (48 bytes, with three issuers after the revoking one).
-    uint256 constant MAX_URI_LENGTH = 2048;
-    uint256 constant URI_STEP = 16;
+    /// @dev Narrower than any window at which a starved read used to grant: 48 bytes at a 200k cap
+    ///      (0.7KB to 1.4KB), a few hundred at 400k (3.5KB to 4.4KB).
+    uint256 constant URI_STEP = 32;
+    /// @dev Granularity of the search for the length past which the frame denies even an unrevoked
+    ///      claim, and the distance swept beyond it.
+    uint256 constant EDGE_STEP = 64;
+    uint256 constant SWEEP_MARGIN = 512;
 
     address holder = makeAddr("holder");
     address holderKey = makeAddr("holderKey");
@@ -96,12 +106,13 @@ contract RevocationReadFailsClosedTest is DeployedShape {
         bytes[4] memory encodings = _encodings(_signClaim(issuer, identity, LP_TOPIC));
         _addClaim(identity, holderKey, issuer.issuer, LP_TOPIC, encodings[0], 0);
         assertTrue(_hasLiquidity(), "control: the claim grants before it is revoked");
+        uint256 sweepEnd = _frameEdge(issuer.issuer, encodings[0]) + SWEEP_MARGIN;
 
         vm.prank(issuer.manager);
         IOnchainId(issuer.issuer).revokeClaimBySignature(encodings[0]);
 
         for (uint256 e = 1; e < 4; e++) {
-            for (uint256 uriLength = 0; uriLength <= MAX_URI_LENGTH; uriLength += URI_STEP) {
+            for (uint256 uriLength = 0; uriLength <= sweepEnd; uriLength += URI_STEP) {
                 _addClaim(identity, holderKey, issuer.issuer, LP_TOPIC, encodings[e], uriLength);
                 assertFalse(
                     _hasLiquidity(),
@@ -115,6 +126,15 @@ contract RevocationReadFailsClosedTest is DeployedShape {
                     )
                 );
             }
+        }
+    }
+
+    /// @dev The first `uri` length at which the frame denies the still-valid canonical claim: past
+    ///      it no read runs at all, so no starved read can grant anything.
+    function _frameEdge(address issuer, bytes memory canonical) internal returns (uint256 uriLength) {
+        for (uriLength = EDGE_STEP;; uriLength += EDGE_STEP) {
+            _addClaim(identity, holderKey, issuer, LP_TOPIC, canonical, uriLength);
+            if (!_hasLiquidity()) return uriLength;
         }
     }
 
