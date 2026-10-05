@@ -95,6 +95,10 @@ contract TREXAllowlistChecker is BaseAllowlistChecker {
     ///      cost grows with the trusted-issuer count for a topic the swap decision does not use.
     uint256 private constant LP_PROBE_GAS = 200_000;
 
+    /// @dev Gas the `isClaimValid` read may spend. ONCHAINID 2.2.1's `ClaimIssuer`, deployed
+    ///      directly, answers in about 20.2k; the rest is headroom.
+    uint256 private constant VALIDITY_READ_GAS = 40_000;
+
     /// @dev Gas each `isClaimRevoked` read may spend. ONCHAINID 2.2.1's `ClaimIssuer` answers in
     ///      2.0k to 4.0k — a byte-keyed mapping read. Fixed rather than a share of what is left, so a
     ///      read is funded the same however long the issuer list or large the claim: a read that
@@ -194,11 +198,13 @@ contract TREXAllowlistChecker is BaseAllowlistChecker {
     ///      topic, look up the canonical claim id, confirm the stored claim matches, and ask the
     ///      issuer whether it is still valid. Existence alone is never sufficient.
     ///
-    ///      Each issuer is read through length-validated staticcalls with a bounded stipend — its
-    ///      fair share of the surviving budget for validity, a fixed amount per revocation read —
-    ///      so neither a malformed answer nor an exhausted stipend can cost the remaining trusted
-    ///      issuers their turn. What an issuer can deny is the claim it attests, never a claim
-    ///      attested by someone else.
+    ///      Each issuer is read through length-validated staticcalls carrying a fixed stipend, so
+    ///      neither a malformed answer nor an exhausted stipend can cost the remaining trusted
+    ///      issuers their turn, and what one issuer can take does not grow with the list or the
+    ///      budget. An issuer that fails, answers malformedly or burns costs the scan that bounded
+    ///      amount and the scan moves on. Only holders of a claim it attests pay it, and they lose
+    ///      the flag only when that cost, added to the entries ahead, pushes a later issuer's valid
+    ///      claim past the frame: the frame carries no headroom for hostile entries.
     function probeLpClaim(address identityRegistry, address account) external view returns (bool) {
         ITREXIdentityRegistry idReg = ITREXIdentityRegistry(identityRegistry);
 
@@ -241,12 +247,13 @@ contract TREXAllowlistChecker is BaseAllowlistChecker {
             // left, and its out-of-gas — absorbed here — leaves the NEXT iteration's `getClaim` to
             // die on the surviving sixty-fourth. That one sits in no guarded frame, so it aborts
             // the whole scan and destroys a later honest issuer's independently valid claim.
-            // Dividing the forwardable share by the iterations still owed a turn makes an
-            // out-of-gas issuer reach the next iteration exactly as a reverting one already does.
+            // A fixed stipend, not a share of what is left: a share shrinks as the list grows,
+            // until it no longer covers an honest issuer near the head of a long list, and grows
+            // with the budget, so a burning issuer takes more the more the caller supplies.
             (bool answered, bool valid) = _staticBool(
                 issuer,
                 abi.encodeCall(ITREXClaimIssuer.isClaimValid, (id, LP_CLAIM_TOPIC, sig, data)),
-                (gasleft() * 63) / (64 * (issuerCount - i))
+                VALIDITY_READ_GAS
             );
             if (!answered || !valid) continue;
 

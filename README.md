@@ -145,10 +145,12 @@ since the adapter calls `checkAllowlist(account, tokenAddress)` and nothing else
   the identity `IdFactory.getIdentity(wallet)` returns.
 - **Claim issuers are semi-trusted**: registry-curated, but arbitrary third-party contracts. The blast
   radius depends on which topic the issuer is trusted for.
-  - **`LP_CLAIM_TOPIC`** — one that reverts, answers malformedly or burns gas costs its own claim
-    holders the liquidity flag and nothing else. `probeLpClaim` runs in its own gas-bounded frame,
-    each issuer is read through a length-validated staticcall, and each is bounded to its share of
-    that frame.
+  - **`LP_CLAIM_TOPIC`** — one that reverts, answers malformedly or burns gas costs the holders of
+    its claims a bounded share of the probe's frame, and the liquidity flag only when that pushes
+    their valid claim from a later issuer past the cap; nobody else pays. The remedy is to remove
+    that claim from the identity, or the issuer from the registry. `probeLpClaim` runs in its own
+    gas-bounded frame, each issuer is read through length-validated staticcalls, and each call
+    carries a fixed stipend (40,000 gas for `isClaimValid`, 10,000 per `isClaimRevoked`).
   - **A required verification topic** — the radius is larger, and the mechanism is upstream. The swap
     decision delegates to `IdentityRegistry.isVerified`, whose loop catches a failing `isClaimValid`
     and then calls the next `getClaim` unguarded. An issuer that burns its frame — deliberately, or
