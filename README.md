@@ -172,8 +172,9 @@ ONCHAINID keys revocation on the exact signature blob, while its `getRecoveredAd
 `v` below 27 and places no bound on `s` — so four byte strings recover the same signer, and revoking
 one leaves three answering "not revoked". The checker therefore refuses a claim whose signature has
 an equivalent revoked encoding, asking the issuer about the whole class rather than the blob the
-identity happened to store. A signature that is not a 65-byte ECDSA encoding is left entirely to the
-issuer's own semantics. The upstream fix ([`50b06f8`](https://github.com/onchain-id/solidity/commit/50b06f8a78215d309fff6828a23b2b35ff352059))
+identity happened to store. A read that does not answer within its fixed stipend counts as revoked,
+so an issuer without `isClaimRevoked` cannot grant liquidity on a 65-byte ECDSA claim. A signature
+that is not a 65-byte ECDSA encoding is left entirely to the issuer's own semantics. The upstream fix ([`50b06f8`](https://github.com/onchain-id/solidity/commit/50b06f8a78215d309fff6828a23b2b35ff352059))
 is on `main` and is in no published release — neither `2.2.1` (`latest`) nor `2.2.2-beta3` (`beta`)
 carries it as of 2026-09-10 — so pin the issuer implementation deliberately rather than by range.
 

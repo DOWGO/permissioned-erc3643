@@ -95,6 +95,12 @@ contract TREXAllowlistChecker is BaseAllowlistChecker {
     ///      cost grows with the trusted-issuer count for a topic the swap decision does not use.
     uint256 private constant LP_PROBE_GAS = 200_000;
 
+    /// @dev Gas each `isClaimRevoked` read may spend. ONCHAINID 2.2.1's `ClaimIssuer` answers in
+    ///      2.0k to 4.0k — a byte-keyed mapping read. Fixed rather than a share of what is left, so a
+    ///      read is funded the same however long the issuer list or large the claim: a read that
+    ///      does not answer denies, so an honest one must never be starved.
+    uint256 private constant REVOCATION_READ_GAS = 10_000;
+
     /// @dev secp256k1 group order, used to enumerate the s-complement encodings ONCHAINID accepts.
     uint256 private constant _SECP256K1_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141;
 
@@ -188,10 +194,11 @@ contract TREXAllowlistChecker is BaseAllowlistChecker {
     ///      topic, look up the canonical claim id, confirm the stored claim matches, and ask the
     ///      issuer whether it is still valid. Existence alone is never sufficient.
     ///
-    ///      Each issuer is read through a length-validated staticcall carrying only its fair share
-    ///      of the surviving budget, so neither a malformed answer nor an exhausted stipend can
-    ///      cost the remaining trusted issuers their turn. What an issuer can deny is the claim it
-    ///      attests, never a claim attested by someone else.
+    ///      Each issuer is read through length-validated staticcalls with a bounded stipend — its
+    ///      fair share of the surviving budget for validity, a fixed amount per revocation read —
+    ///      so neither a malformed answer nor an exhausted stipend can cost the remaining trusted
+    ///      issuers their turn. What an issuer can deny is the claim it attests, never a claim
+    ///      attested by someone else.
     function probeLpClaim(address identityRegistry, address account) external view returns (bool) {
         ITREXIdentityRegistry idReg = ITREXIdentityRegistry(identityRegistry);
 
@@ -251,9 +258,9 @@ contract TREXAllowlistChecker is BaseAllowlistChecker {
             // re-encoding. Ask the issuer about the whole equivalence class instead.
             // Bounded for the same reason the validity read is: this path can `continue`, and a
             // gas-burning answer here would leave the next iteration's unguarded `getClaim` to die
-            // on the remainder. A quarter of this slot's fair share per candidate — a byte-keyed
-            // revocation lookup is a single mapping read.
-            if (_equivalentEncodingRevoked(issuer, sig, (gasleft() * 63) / (64 * (issuerCount - i) * 4))) {
+            // on the remainder. A fixed stipend, not a share of what is left: the holder sets what
+            // is left, since every byte of the unsigned `uri` is spent in `getClaim` first.
+            if (_equivalentEncodingRevoked(issuer, sig, REVOCATION_READ_GAS)) {
                 continue;
             }
 
@@ -303,15 +310,16 @@ contract TREXAllowlistChecker is BaseAllowlistChecker {
         return false;
     }
 
-    /// @dev An issuer that does not implement `isClaimRevoked`, answers unparseably, or exceeds its
-    ///      stipend is read as "nothing revoked": it does not key revocation on signature bytes, so
-    ///      the question does not apply to it. Never denies an honest claim, never reverts. The
-    ///      stipend makes that fail-open reachable under gas starvation as well — deliberate, since
-    ///      the alternative is letting one issuer's answer cost the remaining issuers their turn.
+    /// @dev A read that does not answer — the call fails, exceeds its stipend, answers unparseably,
+    ///      or the issuer does not implement `isClaimRevoked` — counts as revoked. Read as "nothing
+    ///      revoked", a read the holder can starve answers for the holder: padding the `uri` of a
+    ///      re-encoded claim until the read of the revoked encoding runs dry granted it back. An
+    ///      issuer that cannot answer within the stipend therefore cannot grant on a 65-byte ECDSA
+    ///      claim; any other blob never reaches this read. Never reverts.
     function _revoked(address issuer, bytes memory candidate, uint256 gasLimit) private view returns (bool) {
         (bool ok, bool value) =
             _staticBool(issuer, abi.encodeCall(ITREXClaimIssuer.isClaimRevoked, (candidate)), gasLimit);
-        return ok && value;
+        return !ok || value;
     }
 
     /// @dev Staticcall reading exactly one word, with no path that can revert in this frame.

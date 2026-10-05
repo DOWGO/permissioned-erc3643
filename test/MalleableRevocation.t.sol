@@ -31,8 +31,8 @@ contract ByteKeyedClaimIssuer {
 
 /// @dev An issuer whose revocation lookup is expensive on every blob EXCEPT the one it revoked. The
 ///      checker queries the canonical encoding first, so revoking only the last candidate makes the
-///      first three burn before the fourth answers "revoked" — and the loop then has to `continue`
-///      to the next trusted issuer on whatever is left.
+///      first read burn its stipend — which denies, since an unanswered read counts as revoked — and
+///      the loop then has to `continue` to the next trusted issuer on whatever is left.
 contract GasBurningRevocationIssuer {
     bytes32 private immutable revokedHash;
 
@@ -192,8 +192,9 @@ contract MalleableRevocationTest is Test {
         );
     }
 
-    /// @notice Control: the same burner alone still denies, so the test above is not passing because
-    ///         the burner was skipped for an unrelated reason.
+    /// @notice Control: the same burner alone is not granted — its first revocation read burns its
+    ///         stipend, which denies — so the test above is not passing because the burner was skipped
+    ///         for an unrelated reason.
     function test_control_gas_burning_issuer_alone_is_still_revoked() public {
         bytes[4] memory e = _encodings();
 
@@ -211,6 +212,6 @@ contract MalleableRevocationTest is Test {
         registry.setIdentity(bob, address(id));
         registry.setVerified(bob, true);
 
-        assertFalse(_hasLiquidity(), "the revoked encoding must still deny when it is the only issuer");
+        assertFalse(_hasLiquidity(), "the burner alone must not grant");
     }
 }
