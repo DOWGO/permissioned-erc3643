@@ -116,13 +116,24 @@ abstract contract DeployedShape is Test {
 
     /// @notice A `ClaimIssuer` deployed directly, with a CLAIM signing key added by its manager.
     function _newClaimIssuer() internal returns (ClaimIssuerFixture memory fixture) {
+        return _newClaimIssuer(0);
+    }
+
+    /// @notice A `ClaimIssuer` deployed directly whose signing key stores `purposesBeforeClaim` other
+    ///         purposes ahead of CLAIM, the order that costs `keyHasPurpose` the most.
+    function _newClaimIssuer(uint256 purposesBeforeClaim) internal returns (ClaimIssuerFixture memory fixture) {
         string memory tag = vm.toString(++issuerNonce);
         fixture.manager = makeAddr(string.concat("issuerManager", tag));
         address signer;
         (signer, fixture.signingKey) = makeAddrAndKey(string.concat("issuerSigner", tag));
         fixture.issuer = _deploy(abi.encodePacked(OidBytecode.claimissuerCreation(), abi.encode(fixture.manager)));
+        bytes32 signerKey = keccak256(abi.encode(signer));
+        for (uint256 i = 1; i <= purposesBeforeClaim; i++) {
+            vm.prank(fixture.manager);
+            IOnchainId(fixture.issuer).addKey(signerKey, 100 + i, ECDSA_KEY_TYPE);
+        }
         vm.prank(fixture.manager);
-        IOnchainId(fixture.issuer).addKey(keccak256(abi.encode(signer)), CLAIM_SIGNER_PURPOSE, ECDSA_KEY_TYPE);
+        IOnchainId(fixture.issuer).addKey(signerKey, CLAIM_SIGNER_PURPOSE, ECDSA_KEY_TYPE);
     }
 
     /// @notice The canonical (r, s, v) signature `ClaimIssuer.isClaimValid` accepts for a claim of
@@ -132,7 +143,17 @@ abstract contract DeployedShape is Test {
         pure
         returns (bytes memory)
     {
-        bytes32 dataHash = keccak256(abi.encode(identity, topic, CLAIM_DATA));
+        return _signClaim(fixture, identity, topic, CLAIM_DATA);
+    }
+
+    /// @notice The canonical (r, s, v) signature `ClaimIssuer.isClaimValid` accepts for a claim of
+    ///         `topic` over `data` held by `identity`.
+    function _signClaim(ClaimIssuerFixture memory fixture, address identity, uint256 topic, bytes memory data)
+        internal
+        pure
+        returns (bytes memory)
+    {
+        bytes32 dataHash = keccak256(abi.encode(identity, topic, data));
         bytes32 digest = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", dataHash));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(fixture.signingKey, digest);
         return abi.encodePacked(r, s, v);
@@ -148,8 +169,22 @@ abstract contract DeployedShape is Test {
         bytes memory signature,
         uint256 uriLength
     ) internal {
+        _addClaim(identity, manager, issuer, topic, signature, CLAIM_DATA, uriLength);
+    }
+
+    /// @notice Stores a claim over `data` through the identity's own `addClaim`, with an unsigned
+    ///         `uri` of `uriLength` zero bytes.
+    function _addClaim(
+        address identity,
+        address manager,
+        address issuer,
+        uint256 topic,
+        bytes memory signature,
+        bytes memory data,
+        uint256 uriLength
+    ) internal {
         vm.prank(manager);
-        IOnchainId(identity).addClaim(topic, ECDSA_SCHEME, issuer, signature, CLAIM_DATA, string(new bytes(uriLength)));
+        IOnchainId(identity).addClaim(topic, ECDSA_SCHEME, issuer, signature, data, string(new bytes(uriLength)));
     }
 
     /// @notice A T-REX registry suite requiring ELIGIBILITY_TOPIC, with its own `ClaimIssuer`

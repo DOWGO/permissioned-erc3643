@@ -77,6 +77,11 @@ abstract contract LpListShape is DeployedShape {
     address internal holder = makeAddr("holder");
     address internal holderKey = makeAddr("holderKey");
 
+    /// @notice Purposes stored on the key that signs the honest issuer's claim, CLAIM last among them.
+    uint256 internal honestSigningKeyPurposes = 1;
+    /// @notice The honest issuer's claim `data`.
+    bytes internal honestClaimData = CLAIM_DATA;
+
     /// @notice A verified holder on a fresh T-REX suite whose LP-topic list holds `entries` in order:
     ///         a trusted address the holder holds no claim from, a `ClaimIssuer` that signed the
     ///         holder's claim with a `uri` of `uriLength` bytes, a burner the holder also holds a
@@ -101,9 +106,11 @@ abstract contract LpListShape is DeployedShape {
     function _entry(Entry kind, address identity, uint256 uriLength, uint256 index) private returns (address) {
         if (kind == Entry.Filler) return address(uint160(0x1000 + index));
         if (kind == Entry.Honest || kind == Entry.Revoked) {
-            ClaimIssuerFixture memory issuer = _newClaimIssuer();
-            bytes memory signature = _signClaim(issuer, identity, LP_TOPIC);
-            _addClaim(identity, holderKey, issuer.issuer, LP_TOPIC, signature, kind == Entry.Honest ? uriLength : 0);
+            bool honest = kind == Entry.Honest;
+            ClaimIssuerFixture memory issuer = _newClaimIssuer(honest ? honestSigningKeyPurposes - 1 : 0);
+            bytes memory data = honest ? honestClaimData : CLAIM_DATA;
+            bytes memory signature = _signClaim(issuer, identity, LP_TOPIC, data);
+            _addClaim(identity, holderKey, issuer.issuer, LP_TOPIC, signature, data, honest ? uriLength : 0);
             if (kind == Entry.Revoked) {
                 vm.prank(issuer.manager);
                 IOnchainId(issuer.issuer).revokeClaimBySignature(signature);

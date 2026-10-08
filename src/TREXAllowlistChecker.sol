@@ -84,18 +84,21 @@ contract TREXAllowlistChecker is BaseAllowlistChecker {
     ///      LP topic's trusted-issuer list, the holder holding a claim from only one of them, `uri`
     ///      and `data` together at most 1KB — whose edge, that claim at the last entry with a 1KB
     ///      payload, needs about 364k on the deployed shape (T-REX 4.1.6 registries and ONCHAINID
-    ///      2.2.1 identities behind their proxies): about 23k per entry walked past and 70 per
-    ///      payload byte. A claim the holder still holds from another entry, no longer valid, costs
-    ///      about 30k more than an entry walked past, plus its own payload. Beyond the envelope the
-    ///      probe fails closed, costing the liquidity flag only; `probeLpClaim` is public so the
-    ///      cause stays diagnosable off-chain.
+    ///      2.2.1 identities behind their proxies) with a one-purpose signing key and the payload
+    ///      in `uri`, about 382k with seven purposes and the payload in `data`, which
+    ///      `isClaimValid` also hashes: about 23k per entry walked past and 70 per payload byte. A
+    ///      claim the holder still holds from another entry, no longer valid, costs about 30k more
+    ///      than an entry walked past, plus its own payload. Beyond the envelope the probe fails
+    ///      closed, costing the liquidity flag only; `probeLpClaim` is public so the cause stays
+    ///      diagnosable off-chain.
     ///
     ///      The envelope assumes each trusted issuer is registered with unique topics — T-REX's
     ///      `addTrustedIssuer` pushes the issuer once per topic entry without deduplicating, so a
     ///      duplicate takes an entry and its gas — and that every issuer is ONCHAINID 2.2.1's
-    ///      `ClaimIssuer` deployed directly, not behind a proxy. A hostile entry costs up to about
-    ///      86k on top of a walked one (49k if it only burns the validity read), additively,
-    ///      duplicates included; the cap carries no headroom for one at the envelope's edge.
+    ///      `ClaimIssuer` deployed directly, not behind a proxy, signing with a key that holds at
+    ///      most seven purposes. A hostile entry costs up to about 86k on top of a walked one (49k
+    ///      if it only burns the validity read), additively, duplicates included; the cap carries
+    ///      no headroom for one at the envelope's edge.
     ///
     ///      This bounds hostile behaviour, but it is not a bound on the cost of ordinary use, and it
     ///      is per call rather than per transaction. `IAllowlistChecker` carries no requested
@@ -109,7 +112,11 @@ contract TREXAllowlistChecker is BaseAllowlistChecker {
     uint256 private constant LP_PROBE_GAS = 400_000;
 
     /// @dev Gas the `isClaimValid` read may spend. ONCHAINID 2.2.1's `ClaimIssuer`, deployed
-    ///      directly, answers in about 20.2k; the rest is headroom.
+    ///      directly, answers in about 20.2k when the key that signed the claim holds one purpose
+    ///      and `data` is short. `keyHasPurpose` copies every purpose of the key before comparing,
+    ///      then walks them until it meets MANAGEMENT or CLAIM — about 2.2k to 2.5k per further
+    ///      purpose — and `isClaimValid` hashes `data`, about 2.7 per byte. The stipend covers a
+    ///      signing key holding up to seven purposes, in any order, on a claim with a 1KB `data`.
     uint256 private constant VALIDITY_READ_GAS = 40_000;
 
     /// @dev Gas each `isClaimRevoked` read may spend. ONCHAINID 2.2.1's `ClaimIssuer` answers in

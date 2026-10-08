@@ -10,6 +10,7 @@ import {LpListShape, ProbeMeter} from "./IssuerStipends.t.sol";
 contract ProbeEnvelopeTest is LpListShape {
     uint256 constant ENVELOPE_ENTRIES = 10;
     uint256 constant ENVELOPE_URI_LENGTH = 1024;
+    uint256 constant ENVELOPE_DATA_LENGTH = 1024;
     /// @dev Enough for any claim below to be granted, so a denial through `checkAllowlist` is the cap.
     uint256 constant UNCAPPED_BUDGET = 2_000_000;
 
@@ -41,6 +42,24 @@ contract ProbeEnvelopeTest is LpListShape {
             _lpList(twoRevokedAhead, ENVELOPE_URI_LENGTH),
             "ten entries, two revoked claims of the holder ahead, 1KB uri"
         );
+    }
+
+    /// @notice The stipend covers a signing key holding seven purposes in the costliest order — CLAIM
+    ///         stored last — on a claim carrying the envelope's 1KB payload in `data`, which
+    ///         `isClaimValid` hashes, at the envelope's edge. A key holding eight cannot grant
+    ///         liquidity on such a claim whatever the budget; the seven-purpose grant, on a heavier
+    ///         list, is the control that the purpose count alone denies the eight.
+    function test_signing_key_purposes_the_stipend_covers() public {
+        honestSigningKeyPurposes = 7;
+        honestClaimData = new bytes(ENVELOPE_DATA_LENGTH);
+        address token = _lpList(_list(ENVELOPE_ENTRIES, ENVELOPE_ENTRIES - 1), 0);
+        assertTrue(_hasLiquidity(checker, token), "seven purposes at the envelope's edge must be granted");
+
+        honestSigningKeyPurposes = 8;
+        token = _lpList(_list(1, 0), 0);
+        (bool grantedUncapped,) = meter.probe(checker, token, holder, UNCAPPED_BUDGET);
+        assertFalse(grantedUncapped, "eight purposes exceed the stipend whatever the budget");
+        assertFalse(_hasLiquidity(checker, token), "eight purposes must deny");
     }
 
     /// @notice End to end through the cap: a hostile issuer at index 0 that burns every stipend does
