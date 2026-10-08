@@ -116,9 +116,12 @@ It holds under three preconditions:
   four purposes and the deployer gives its signing keys one (CLAIM); past seven, the read may exceed
   the stipend, which denies the claim.
 
-A hostile entry costs about 86,000 gas on top of a walked one (49,000 if it only burns the validity
-read). The cost is additive, duplicates included, so each hostile entry shortens the list the cap
-can reach; the cap carries no headroom for one at the envelope's edge.
+An issuer's code can spend at most 80,000 gas of the frame: the validity stipend and the four
+revocation stipends. Reading its claim and calling it adds about 15,700 with an empty payload, plus
+70 per payload byte, so a hostile entry costs up to about 96,000 on top of a walked one; the suite's
+burner, which keeps 2,000 of each stipend to answer, measures 86,000; one that only burns the validity
+read, 49,000. The cost is additive, duplicates included, so each hostile entry shortens the list
+the cap can reach; the cap carries no headroom for one at the envelope's edge.
 
 The stipends are constants. A gas repricing that pushed an honest issuer's reads past them would
 deny every LP claim — never the swap flag — until the adapter owner installs a re-sized checker

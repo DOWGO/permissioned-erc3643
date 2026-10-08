@@ -96,9 +96,12 @@ contract TREXAllowlistChecker is BaseAllowlistChecker {
     ///      `addTrustedIssuer` pushes the issuer once per topic entry without deduplicating, so a
     ///      duplicate takes an entry and its gas — and that every issuer is ONCHAINID 2.2.1's
     ///      `ClaimIssuer` deployed directly, not behind a proxy, signing with a key that holds at
-    ///      most seven purposes. A hostile entry costs up to about 86k on top of a walked one (49k
-    ///      if it only burns the validity read), additively, duplicates included; the cap carries
-    ///      no headroom for one at the envelope's edge.
+    ///      most seven purposes. An issuer's code can spend at most 80k of the frame, the five
+    ///      stipends; reading its claim and calling it adds about 15.7k plus its payload, so a
+    ///      hostile entry costs up to about 96k, with an empty payload, on top of a walked one (the
+    ///      suite's burner, keeping 2k of each stipend to answer, measures 86k; one that only burns
+    ///      the validity read, 49k), additively, duplicates included; the cap carries no headroom
+    ///      for one at the envelope's edge.
     ///
     ///      This bounds hostile behaviour, but it is not a bound on the cost of ordinary use, and it
     ///      is per call rather than per transaction. `IAllowlistChecker` carries no requested
